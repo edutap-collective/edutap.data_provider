@@ -2,6 +2,8 @@
 
 from importlib.metadata import version
 
+from .vocabulary import FieldKind, PassLifecycleState, WalletType
+
 __version__ = version("edutap.data_provider")
 
-__all__ = ["__version__"]
+__all__ = ["FieldKind", "PassLifecycleState", "WalletType", "__version__"]
