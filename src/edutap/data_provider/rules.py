@@ -29,6 +29,18 @@ class Signature:
     one argument to mean anything). `parse_rule` enforces it so that a wrong
     argument count is a startup-time `RuleError`, not a request-time
     `IndexError` or `ValueError` from positional unpacking in `evaluate`.
+
+    `date_forward` names, for a function whose `returns` is `"any"`, which
+    argument positions it can hand back unchanged — the positions the startup
+    date-type check must recurse into to decide whether a nested call like
+    `coalesce(a, b)` or `if_else(cond, a, b)` used in a date position actually
+    produces a date. A `variadic` `"any"` function (`coalesce`, `min`, `max`)
+    forwards all of its actual arguments regardless of count, so it does not
+    need `date_forward`; `if_else` is fixed-arity and forwards only its
+    `then`/`else` branches, never its condition, so it sets `date_forward`
+    explicitly. This lives here, next to `date_arguments`, so the validator
+    reads it off `FUNCTIONS` instead of hand-coding a second table that could
+    drift from this one.
     """
 
     name: str
@@ -36,6 +48,7 @@ class Signature:
     arity: int
     date_arguments: tuple[int, ...] = ()  # positions that must be dates
     variadic: bool = False
+    date_forward: tuple[int, ...] = ()  # "any"-returning: positions forwarded verbatim
 
 
 FUNCTIONS: dict[str, Signature] = {
@@ -44,7 +57,9 @@ FUNCTIONS: dict[str, Signature] = {
     "coalesce": Signature("coalesce", "any", 1, variadic=True),
     # Not "if": Python reserves the keyword, so `ast.parse("if(a, b, c)")` raises
     # SyntaxError. The name says the three-argument shape out loud.
-    "if_else": Signature("if_else", "any", 3),
+    # date_forward=(1, 2): if_else forwards its `then`/`else` branches, never its
+    # boolean condition at position 0.
+    "if_else": Signature("if_else", "any", 3, date_forward=(1, 2)),
     "exists": Signature("exists", "boolean", 1),
     "is_null": Signature("is_null", "boolean", 1),
     "is_empty": Signature("is_empty", "boolean", 1),

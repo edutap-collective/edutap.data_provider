@@ -7,6 +7,7 @@ issued pass.
 """
 
 import ast
+import datetime
 
 from .config import ConfigError, ProviderConfig
 from .rules import FUNCTIONS, RuleError, parse_rule
@@ -39,6 +40,60 @@ def datetime_fields(config: ProviderConfig, view_type: str) -> set[str]:
     return stored | computed
 
 
+def _date_problems(node: ast.expr, date_like: set[str]) -> list[str]:
+    """Return why `node`, used where a date is required, might not produce one.
+
+    An empty list means the node type-checks as a date. The check is recursive
+    because a date-position argument is not always a bare field reference — the
+    canonical shape of this rule language is a fallback (`coalesce`) or a branch
+    (`if_else`) feeding a date function, so the check has to see through those
+    "any"-returning functions to what they actually forward, using `Signature`
+    (`FUNCTIONS[...].variadic` and `.date_forward`) rather than naming those
+    functions here — a second, hand-written table of "which functions forward
+    which arguments" would drift from `rules.py` the first time someone adds one.
+    """
+    if isinstance(node, ast.Name):
+        if node.id in date_like:
+            return []
+        return [f"{node.id!r} does not declare DATETIME"]
+
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            try:
+                datetime.date.fromisoformat(node.value[:10])
+            except ValueError:
+                return [f"{node.value!r} is not an ISO date"]
+            return []
+        return [f"{node.value!r} is not a date"]
+
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        signature = FUNCTIONS[node.func.id]
+        if signature.returns == "date":
+            return []
+        if signature.returns != "any":
+            return [f"{node.func.id}() returns {signature.returns}, not a date"]
+        # "any"-returning: recurse into whichever argument positions this function
+        # forwards unchanged. A variadic one (coalesce, min, max) forwards all of
+        # its actual arguments; a fixed-arity one (if_else) forwards only the
+        # positions named in Signature.date_forward. Neither applying (e.g. first(),
+        # which returns an element of a list, not one of its own arguments) means
+        # this call's result cannot be shown to be a date.
+        if signature.variadic:
+            positions: range | tuple[int, ...] = range(len(node.args))
+        elif signature.date_forward:
+            positions = signature.date_forward
+        else:
+            return [f"{node.func.id}() returns any, which cannot be verified as a date"]
+        return [
+            problem
+            for position in positions
+            if position < len(node.args)
+            for problem in _date_problems(node.args[position], date_like)
+        ]
+
+    return [f"{ast.dump(node)} cannot be verified as a date"]  # pragma: no cover
+
+
 def _check_view(config: ProviderConfig, view_type: str) -> list[str]:
     view = config.views[view_type]
     known = set(view.fields) | set(view.derived) | set(config.constants)
@@ -66,10 +121,9 @@ def _check_view(config: ProviderConfig, view_type: str) -> list[str]:
                 if position >= len(node.args):
                     continue
                 argument = node.args[position]
-                if isinstance(argument, ast.Name) and argument.id not in date_like:
+                for reason in _date_problems(argument, date_like):
                     problems.append(
-                        f"{view_type}.{name}: {node.func.id}() needs a date, but "
-                        f"{argument.id!r} does not declare DATETIME."
+                        f"{view_type}.{name}: {node.func.id}() needs a date, but {reason}."
                     )
     return problems
 
