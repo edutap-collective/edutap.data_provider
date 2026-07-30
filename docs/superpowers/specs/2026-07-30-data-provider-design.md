@@ -320,8 +320,9 @@ src/edutap/data_provider/
         db.py        # person_view, pass_state
         dbdef.py     # SchemaDefinition for the entry point
     vocabulary.py    # WalletType, PassLifecycleState, FieldKind
-    config.py        # view configuration: parsing and startup validation
+    config.py        # view configuration: parsing and structural validation
     rules.py         # the closed function set and its evaluator
+    validation.py    # cross-validation of rules against fields and kinds
     catalogue.py     # catalogue per view_type, from the configuration
     repository.py    # reading person_view and pass_state
     api/             # FastAPI routers, auth, problem+json errors
