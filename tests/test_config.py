@@ -79,3 +79,20 @@ def test_dotted_or_nested_field_names_are_rejected(tmp_path):
     text = CONFIG.replace("      surname: [STRING, TEXT]", "      person.surname: [STRING]")
     with pytest.raises(ConfigError, match="flat"):
         load_config(write(tmp_path, text))
+
+
+def test_malformed_yaml_is_fatal(tmp_path):
+    text = "views:\n  full_view:\n    fields: [unbalanced\n"
+    with pytest.raises(ConfigError, match="views.yaml"):
+        load_config(write(tmp_path, text))
+
+
+def test_fields_accept_the_long_mapping_form(tmp_path):
+    text = CONFIG.replace(
+        "      surname: [STRING, TEXT]",
+        "      surname:\n        kinds: [STRING, TEXT]\n        description: Family name",
+    )
+    config = load_config(write(tmp_path, text))
+    surname = config.views["full_view"].fields["surname"]
+    assert surname.kinds == [FieldKind.STRING, FieldKind.TEXT]
+    assert surname.description == "Family name"

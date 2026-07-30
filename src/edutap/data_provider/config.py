@@ -64,7 +64,10 @@ def load_config(path: Path) -> ProviderConfig:
     """Load and structurally validate the view configuration."""
     if not path.is_file():
         raise ConfigError(f"View configuration not found: {path}")
-    raw = yaml.safe_load(path.read_text()) or {}
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as error:
+        raise ConfigError(f"View configuration is not valid YAML: {path}: {error}") from error
     for view in (raw.get("views") or {}).values():
         if isinstance(view, dict) and "fields" in view:
             view["fields"] = _normalise_fields(view["fields"])
