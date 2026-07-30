@@ -22,34 +22,42 @@ class RuleError(Exception):
 
 @dataclass(frozen=True)
 class Signature:
-    """What a function accepts and returns, for the startup type check."""
+    """What a function accepts and returns, for the startup type check.
+
+    `arity` is the exact expected argument count for a fixed-arity function,
+    or the minimum count for a `variadic` one (e.g. `coalesce` needs at least
+    one argument to mean anything). `parse_rule` enforces it so that a wrong
+    argument count is a startup-time `RuleError`, not a request-time
+    `IndexError` or `ValueError` from positional unpacking in `evaluate`.
+    """
 
     name: str
     returns: str  # "date" | "number" | "boolean" | "string" | "any"
+    arity: int
     date_arguments: tuple[int, ...] = ()  # positions that must be dates
     variadic: bool = False
 
 
 FUNCTIONS: dict[str, Signature] = {
-    "today": Signature("today", "date"),
-    "now": Signature("now", "date"),
-    "coalesce": Signature("coalesce", "any", variadic=True),
+    "today": Signature("today", "date", 0),
+    "now": Signature("now", "date", 0),
+    "coalesce": Signature("coalesce", "any", 1, variadic=True),
     # Not "if": Python reserves the keyword, so `ast.parse("if(a, b, c)")` raises
     # SyntaxError. The name says the three-argument shape out loud.
-    "if_else": Signature("if_else", "any"),
-    "exists": Signature("exists", "boolean"),
-    "is_null": Signature("is_null", "boolean"),
-    "is_empty": Signature("is_empty", "boolean"),
-    "eq": Signature("eq", "boolean"),
-    "lt": Signature("lt", "boolean"),
-    "gt": Signature("gt", "boolean"),
-    "contains": Signature("contains", "boolean"),
-    "add_days": Signature("add_days", "date", date_arguments=(0,)),
-    "days_between": Signature("days_between", "number", date_arguments=(0, 1)),
-    "min": Signature("min", "any", variadic=True),
-    "max": Signature("max", "any", variadic=True),
-    "first": Signature("first", "any"),
-    "join": Signature("join", "string"),
+    "if_else": Signature("if_else", "any", 3),
+    "exists": Signature("exists", "boolean", 1),
+    "is_null": Signature("is_null", "boolean", 1),
+    "is_empty": Signature("is_empty", "boolean", 1),
+    "eq": Signature("eq", "boolean", 2),
+    "lt": Signature("lt", "boolean", 2),
+    "gt": Signature("gt", "boolean", 2),
+    "contains": Signature("contains", "boolean", 2),
+    "add_days": Signature("add_days", "date", 2, date_arguments=(0,)),
+    "days_between": Signature("days_between", "number", 2, date_arguments=(0, 1)),
+    "min": Signature("min", "any", 1, variadic=True),
+    "max": Signature("max", "any", 1, variadic=True),
+    "first": Signature("first", "any", 1),
+    "join": Signature("join", "string", 2),
 }
 
 
@@ -73,6 +81,19 @@ def parse_rule(source: str) -> ast.Expression:
                 )
             if node.keywords:
                 raise RuleError(f"Keyword arguments are not allowed in {source!r}.")
+            signature = FUNCTIONS[node.func.id]
+            argument_count = len(node.args)
+            if signature.variadic:
+                if argument_count < signature.arity:
+                    raise RuleError(
+                        f"{node.func.id!r} expects at least {signature.arity} argument(s), "
+                        f"got {argument_count}, in rule {source!r}."
+                    )
+            elif argument_count != signature.arity:
+                raise RuleError(
+                    f"{node.func.id!r} expects {signature.arity} argument(s), "
+                    f"got {argument_count}, in rule {source!r}."
+                )
             continue
         raise RuleError(
             f"{type(node).__name__} is not allowed in a rule. Rule {source!r} may only use "
@@ -82,8 +103,18 @@ def parse_rule(source: str) -> ast.Expression:
 
 
 def _as_date(value: Any) -> datetime.date | None:
-    """Turn an ISO string into a real date; pass dates through; None stays None."""
-    if value is None or isinstance(value, datetime.date):
+    """Turn an ISO string, date or datetime into a real date; None stays None.
+
+    `datetime.datetime` is checked before `datetime.date` because `datetime`
+    is a subclass of `date`: an `isinstance(value, datetime.date)` check alone
+    is also true for a `datetime` and would return it unreduced, breaking
+    arithmetic against a plain `date` later.
+    """
+    if value is None:
+        return value
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
         return value
     if isinstance(value, str):
         try:
