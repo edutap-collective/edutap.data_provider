@@ -211,10 +211,14 @@ user-defined expressions.
 | Group | Functions |
 |---|---|
 | Values | field reference, literal, named constant, `today()`, `now()` |
-| Selection | `if(condition, then, else)`, `coalesce(a, b, …)` |
+| Selection | `if_else(condition, then, else)`, `coalesce(a, b, …)` |
 | Conditions | `exists(a)`, `is_null(a)`, `is_empty(a)`, `eq(a, b)`, `lt(a, b)`, `gt(a, b)`, `contains(array, value)` |
 | Dates | `add_days(date, n)`, `days_between(a, b)`, `min(…)`, `max(…)` |
 | Arrays | `first(a)`, `join(separator, a)` |
+
+The conditional is `if_else`, not `if`: Python reserves the keyword, so a rule
+written as `if(…)` cannot be parsed at all — corrected during implementation,
+2026-07-31.
 
 `exists` and `is_null` are different questions: in JSONB an absent key and a key with
 a null value are distinct states. A student simply has no

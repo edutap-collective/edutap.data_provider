@@ -1112,7 +1112,7 @@ def test_the_seven_day_rule_with_an_open_ended_role():
 
 
 def test_if_branches_on_a_condition():
-    rule = "if(exists(employee_role_valid_until), 'employee', 'other')"
+    rule = "if_else(exists(employee_role_valid_until), 'employee', 'other')"
     assert run(rule, {"employee_role_valid_until": "2027-01-01"}) == "employee"
     assert run(rule, {}) == "other"
 
@@ -1207,7 +1207,7 @@ FUNCTIONS: dict[str, Signature] = {
     "today": Signature("today", "date"),
     "now": Signature("now", "date"),
     "coalesce": Signature("coalesce", "any", variadic=True),
-    "if": Signature("if", "any"),
+    "if_else": Signature("if_else", "any"),
     "exists": Signature("exists", "boolean"),
     "is_null": Signature("is_null", "boolean"),
     "is_empty": Signature("is_empty", "boolean"),
@@ -1294,7 +1294,7 @@ def evaluate(
 
     def call(node: ast.Call) -> Any:
         name = node.func.id  # type: ignore[union-attr]  parse_rule guarantees a Name
-        if name == "if":
+        if name == "if_else":
             condition, then, otherwise = node.args
             return resolve(then) if resolve(condition) else resolve(otherwise)
         if name == "exists":
