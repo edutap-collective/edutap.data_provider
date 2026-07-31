@@ -32,7 +32,14 @@ def _problem(status_code: int, title: str, detail: str) -> JSONResponse:
 
 
 def install_error_handlers(app: FastAPI) -> None:
-    """Render every error this API answers with as application/problem+json."""
+    """Render this API's own errors as application/problem+json.
+
+    "Its own" is the exact scope: everything raised inside a route or a dependency,
+    deliberately as a `ProblemError` or not. It does not cover the responses
+    FastAPI produces before a route is ever entered — a malformed request body
+    still answers 422 in plain `application/json` with FastAPI's own
+    `{"detail": [...]}` shape, and so does a 404 for an unmatched path.
+    """
 
     @app.exception_handler(ProblemError)
     async def _handle(_: Request, error: ProblemError) -> JSONResponse:
