@@ -35,18 +35,89 @@ class _UniqueKeyLoader(yaml.SafeLoader):
     document: view names, field names inside a view, constants.
     """
 
-    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
-        """Construct a mapping, refusing a key that was already seen."""
+    def __init__(self, stream: Any) -> None:
+        """Start with nothing scanned yet; one loader reads one document."""
+        super().__init__(stream)
+        self._scanned: dict[int, yaml.MappingNode] = {}
+
+    def _refuse_duplicates(self, node: yaml.MappingNode, deep: bool) -> None:
+        """Raise if this mapping, as written, names the same key twice.
+
+        Each node is examined **once**, on the first visit, and that is load-bearing
+        rather than an optimisation. PyYAML resolves an anchor to one shared node
+        object and `flatten_mapping` rewrites its `node.value` in place, splicing the
+        inherited pairs in. A second look at the same node would therefore see the
+        merged result, where an inherited key and its deliberate override legitimately
+        sit side by side — and would report that correct document as a duplicate. The
+        first visit always precedes the merge, because both callers below check before
+        they delegate.
+        """
+        # Keyed by identity, and the node is kept so it cannot be collected and its
+        # id reused by an unrelated object while the document is still loading.
+        if id(node) in self._scanned:
+            return
+        self._scanned[id(node)] = node
+
         # A list, not a set: a key need not be hashable at this point, and an
         # unhashable one must reach PyYAML's own error rather than raise TypeError
         # here. Configuration documents are small, so the linear scan costs nothing.
         seen: list[Any] = []
         for key_node, _ in node.value:
+            # `<<` is an instruction, not a key: it carries the merge tag, which has
+            # no constructor, so constructing it would raise. Repeating it is legal
+            # too — each occurrence merges another anchor — so it is skipped rather
+            # than counted. `flatten_mapping` resolves it, and the override below
+            # makes sure what it pulls in was checked as well.
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                continue
             key = self.construct_object(key_node, deep=deep)
             if key in seen:
                 raise _DuplicateKeyError(key, key_node.start_mark)
             seen.append(key)
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        """Construct a mapping, refusing a key that was already seen.
+
+        The scan runs on the mapping as it was *written*, before `super()` resolves
+        any merge key. That order is the whole point: after the merge, a key that was
+        inherited and then deliberately overridden appears twice in the same list, so
+        a later scan would report the most ordinary correct use of `<<` as a
+        duplicate. Scanning first lets an author inherit a key and override it, while
+        two literally repeated keys are still refused.
+        """
+        self._refuse_duplicates(node, deep)
         return super().construct_mapping(node, deep=deep)
+
+    def flatten_mapping(self, node: yaml.MappingNode) -> None:
+        """Resolve merge keys, checking each source mapping on the way in.
+
+        Without this override a duplicate could be smuggled in through an anchor
+        written *at* the merge site (`<<: &defaults {…}`), because PyYAML descends
+        into a merge source by calling `flatten_mapping` on it, never
+        `construct_mapping` — so the scan above would never see that mapping. Its
+        repeated key would then be resolved by the plain last-one-wins rule and
+        silently change what a view exposes: exactly the failure this loader exists
+        to prevent.
+
+        An anchor reachable more than once — bound to an ordinary key and merged
+        elsewhere, or merged in two places — arrives here repeatedly. Only the first
+        arrival examines it; see `_refuse_duplicates` for why looking again would
+        reject a correct document.
+
+        Recursion needs no special handling: `super()` calls `self.flatten_mapping`
+        for nested merges, which lands here again.
+        """
+        for key_node, value_node in node.value:
+            if key_node.tag != "tag:yaml.org,2002:merge":
+                continue
+            # `<<: *one` is a mapping; `<<: [*one, *two]` is a sequence of them.
+            sources = (
+                value_node.value if isinstance(value_node, yaml.SequenceNode) else [value_node]
+            )
+            for source in sources:
+                if isinstance(source, yaml.MappingNode):
+                    self._refuse_duplicates(source, deep=False)
+        super().flatten_mapping(node)
 
 
 class FieldSpec(BaseModel):
