@@ -62,3 +62,68 @@ def test_a_wrong_token_is_rejected(client):
         headers={"Authorization": "Bearer nope"},
     )
     assert response.status_code == 401
+
+
+def test_a_non_ascii_authorization_header_is_rejected(client):
+    """A non-ASCII header must be a plain 401, not a 500.
+
+    The header is attacker-controlled and `secrets.compare_digest` raises TypeError
+    on a `str` holding non-ASCII characters, so a naive constant-time comparison
+    turns a hostile header into a server error. The value is sent as raw bytes
+    because that is what a hostile client does — the header arrives at the
+    application latin-1 decoded, hence as a `str` with non-ASCII characters.
+    """
+    response = client.get(
+        "/catalogue",
+        params={"view_type": "mensapass"},
+        headers={"Authorization": "Bearer tökén-ünïcode".encode()},
+    )
+    assert response.status_code == 401
+
+
+def test_the_rejection_does_not_distinguish_a_missing_from_a_wrong_token(client):
+    """Both failures carry the same body: the response must not be an oracle."""
+    missing = client.get("/catalogue", params={"view_type": "mensapass"})
+    wrong = client.get(
+        "/catalogue",
+        params={"view_type": "mensapass"},
+        headers={"Authorization": "Bearer nope"},
+    )
+    assert missing.status_code == wrong.status_code == 401
+    assert missing.json() == wrong.json()
+
+
+def test_another_scheme_is_rejected(client):
+    """The token alone, or under a different scheme, is not a bearer credential."""
+    for header in ("test-token", "Basic test-token", "Bearer"):
+        response = client.get(
+            "/catalogue",
+            params={"view_type": "mensapass"},
+            headers={"Authorization": header},
+        )
+        assert response.status_code == 401, header
+
+
+def test_the_scheme_is_matched_case_insensitively(client):
+    """RFC 7235 makes the scheme case-insensitive; only the token is a secret."""
+    response = client.get(
+        "/catalogue",
+        params={"view_type": "mensapass"},
+        headers={"Authorization": "bearer test-token"},
+    )
+    assert response.status_code == 200
+
+
+def test_an_empty_configured_token_authenticates_nobody(tmp_path, monkeypatch):
+    """An empty token must not turn into "no credential needed"."""
+    path = tmp_path / "views.yaml"
+    path.write_text(CONFIG)
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_DATABASE_URL", "postgresql+asyncpg://u:p@h/db")
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_CONFIG_PATH", str(path))
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_API_TOKEN", "")
+    app = create_app()
+    app.dependency_overrides[get_provider_config] = lambda: load_config(path)
+    client = TestClient(app)
+    for headers in ({}, {"Authorization": "Bearer "}, {"Authorization": "Bearer"}):
+        response = client.get("/catalogue", params={"view_type": "mensapass"}, headers=headers)
+        assert response.status_code == 401, headers
