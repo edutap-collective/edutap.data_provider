@@ -16,7 +16,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str
+    # A DSN carries the database password in clear text and `BaseSettings.__repr__`
+    # prints every plain field verbatim, so the URL is held as a secret just like the
+    # token. Readers unwrap it with `get_secret_value()`.
+    database_url: SecretStr
     config_path: Path
     api_token: SecretStr
     echo_sql: bool = False

@@ -28,5 +28,5 @@ def get_repository() -> Repository:
     un-overridden while pointing `database_url` at a host that does not resolve.
     """
     settings = get_settings()
-    engine = create_async_engine(settings.database_url, echo=settings.echo_sql)
+    engine = create_async_engine(settings.database_url.get_secret_value(), echo=settings.echo_sql)
     return Repository(async_sessionmaker(engine, expire_on_commit=False))
