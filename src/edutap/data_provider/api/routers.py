@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from ..catalogue import CatalogueEntry, UnknownViewType, catalogue_for
 from ..config import ProviderConfig
 from ..repository import Repository
-from ..rules import evaluate, parse_rule
+from ..rules import RuleError, evaluate, parse_rule
 from ..validation import datetime_fields
 from .auth import require_token
 from .dependencies import get_provider_config, get_repository
@@ -70,7 +70,27 @@ async def lookup(
     answer: dict[str, Any] = {}
     for key in request.fields:
         if entries[key].derived:
-            value = evaluate(parse_rule(view.derived[key].rule), payload, config.constants, dates)
+            # Not dead code, and not something startup validation makes redundant:
+            # `validate_config` type-checks the rule's static AST, while this failure
+            # mode lives in the row. A field declared DATETIME whose stored value is
+            # not an ISO date (say a German "02.08.2026") makes `rules._as_date` raise
+            # at read time. Without this catch the RuleError leaves the route unhandled
+            # and Starlette answers text/plain, breaking the one uniform
+            # application/problem+json contract this API promises.
+            try:
+                value = evaluate(
+                    parse_rule(view.derived[key].rule), payload, config.constants, dates
+                )
+            except RuleError as error:
+                # 500, not 4xx: the request was well-formed and no different request
+                # would succeed. The defect is in data this service owns, so the blame
+                # — and the retry semantics — belong on the server side.
+                raise ProblemError(
+                    500,
+                    "Derived field cannot be computed",
+                    f"Rule for field {key!r} of view {request.view_type!r} failed on the "
+                    "stored data for this person.",
+                ) from error
         else:
             value = payload.get(key)
         if value is not None:
