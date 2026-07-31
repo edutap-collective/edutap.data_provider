@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "edutap.data_provider"
+version = "0.1.0"
+description = "Read-only service delivering person views and pass states for eduTAP"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "EUPL-1.2"
+authors = [{ name = "eduTAP" }]
+dependencies = [
+    "asyncpg>=0.29",
+    "fastapi>=0.115",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "pyyaml>=6",
+    "sqlalchemy>=2.0",
+    "sqlmodel>=0.0.22",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+    # PEP 508 direct reference, not a bare name: edutap.db_definitions is public
+    # but not published to PyPI. A direct reference resolves the same way whether
+    # this extra is installed alone (`make venv`, a fresh clone) or after the
+    # package itself, so there is no required install ordering — unlike a
+    # separate `pip install` step run before `-e ".[dev]"` in CI.
+    "edutap.db_definitions @ git+https://github.com/edutap-collective/edutap.db_definitions@main",
+    "httpx>=0.27",
+    "pdbp",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.16,<0.17",
+    "testcontainers[postgres]>=4.8",
+    "ty",
+]
+docs = ["myst-parser", "sphinx>=8"]
+
+[project.entry-points."edutap.db_definitions"]
+schema = "edutap.data_provider.models.dbdef:definition"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/edutap"]
+
+[tool.hatch.metadata]
+# Required by hatchling for the `edutap.db_definitions` direct reference (a git URL,
+# not a PyPI name) in the `dev` extra above. This package is never published to
+# PyPI itself, so the restriction direct references normally exist to enforce there
+# does not apply.
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs a PostgreSQL container"]
+addopts = "-m 'not integration'"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP", "D", "S"]
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "S101"]
+# S106: bandit's hardcoded-password heuristic flags this file's two `PassState(...)`
+# keyword arguments (`pass_id=`, `pass_template=`) because their underscore-separated
+# words include "pass" — they are wallet-pass fields, not passwords. Scoped to this
+# one file, not all tests, so the check still applies to test code elsewhere.
+"tests/test_models.py" = ["S106"]
