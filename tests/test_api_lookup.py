@@ -25,6 +25,14 @@ ROW = {
     "internal_note": "not in the catalogue",
 }
 
+# The two ways a payload can say "this person has no value here". `ROW` cannot show
+# either, because every field it carries is filled — a test using `ROW` would pass
+# whether or not the projection drops empty values.
+ROWS_WITHOUT_A_VALUE = {
+    "absent key": {"display_name": "A. Doe"},
+    "explicit null": {"display_name": "A. Doe", "student_role_valid_until": None},
+}
+
 # A value no producer should have written, but one a real database can hold: the
 # field is declared DATETIME, so `rules._as_date` refuses it at read time. Startup
 # validation cannot see this — it type-checks the rule, never the rows.
@@ -115,7 +123,11 @@ def test_an_unknown_person_is_a_not_found_problem(client):
     assert response.headers["content-type"].startswith("application/problem+json")
 
 
-def test_an_empty_field_is_absent_rather_than_null(client):
+@pytest.mark.parametrize("row", ROWS_WITHOUT_A_VALUE.values(), ids=list(ROWS_WITHOUT_A_VALUE))
+def test_an_empty_field_is_absent_rather_than_null(tmp_path, monkeypatch, row):
+    # A client of its own rather than the shared `client` fixture: this is the one
+    # test whose row must be incomplete, and `ROW` is what the other tests project.
+    client = build_client(tmp_path, monkeypatch, row)
     response = post(
         client,
         {
@@ -124,7 +136,11 @@ def test_an_empty_field_is_absent_rather_than_null(client):
             "fields": ["display_name", "student_role_valid_until"],
         },
     )
-    assert set(response.json()) == {"display_name", "student_role_valid_until"}
+    assert response.status_code == 200
+    body = response.json()
+    assert body["display_name"] == "A. Doe"
+    # Not `body["student_role_valid_until"] is None`: the key must be gone, not null.
+    assert "student_role_valid_until" not in body
 
 
 def test_a_rule_failing_on_stored_data_is_still_a_problem_document(
