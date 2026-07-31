@@ -227,3 +227,55 @@ def test_a_duplicate_inside_the_merged_mapping_is_fatal(tmp_path):
     )
     with pytest.raises(ConfigError, match="surname"):
         load_config(write(tmp_path, text))
+
+
+def test_a_duplicate_in_an_anchor_written_at_the_merge_site_is_fatal(tmp_path):
+    """The shape that hides from a naive check: an anchor with no other binding.
+
+    PyYAML descends into a merge source by calling `flatten_mapping` on it, never
+    `construct_mapping`. A mapping reached only that way would therefore skip the
+    duplicate scan, and its repeated key would be resolved by the plain
+    last-one-wins rule — silently changing which fields the view exposes.
+    """
+    text = """
+views:
+  mensapass:
+    <<: &defaults
+      description: Inherited
+      fields:
+        surname: [STRING]
+      fields:
+        surname: [STRING]
+        mail: [STRING, LINK]
+    description: Explicit
+"""
+    with pytest.raises(ConfigError, match="fields"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_duplicate_in_a_sequence_of_merged_anchors_is_fatal(tmp_path):
+    """`<<: [*one, *two]` is the other spelling of a merge and gets the same check."""
+    text = """
+views:
+  mensapass:
+    <<: [&one {fields: {surname: [STRING]}, fields: {mail: [STRING]}}]
+    description: Explicit
+"""
+    with pytest.raises(ConfigError, match="fields"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_duplicate_in_a_merge_nested_inside_a_merge_is_fatal(tmp_path):
+    """Merges nest, so the check has to follow them all the way down."""
+    text = """
+views:
+  mensapass:
+    <<: &outer
+      <<: &inner
+        fields: {surname: [STRING]}
+        fields: {mail: [STRING]}
+      description: Inherited
+    description: Explicit
+"""
+    with pytest.raises(ConfigError, match="fields"):
+        load_config(write(tmp_path, text))

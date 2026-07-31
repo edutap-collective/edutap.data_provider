@@ -35,16 +35,8 @@ class _UniqueKeyLoader(yaml.SafeLoader):
     document: view names, field names inside a view, constants.
     """
 
-    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
-        """Construct a mapping, refusing a key that was already seen.
-
-        The scan runs on the mapping as it was *written*, before `super()` resolves
-        any merge key. That order is the whole point. `flatten_mapping` appends the
-        inherited pairs into the same list, so a scan afterwards would see an
-        overridden key twice and report the most ordinary correct use of `<<` as a
-        duplicate. Scanning first means an author can inherit a key and override it,
-        while two literally repeated keys are still refused.
-        """
+    def _refuse_duplicates(self, node: yaml.MappingNode, deep: bool) -> None:
+        """Raise if this mapping, as written, names the same key twice."""
         # A list, not a set: a key need not be hashable at this point, and an
         # unhashable one must reach PyYAML's own error rather than raise TypeError
         # here. Configuration documents are small, so the linear scan costs nothing.
@@ -53,14 +45,54 @@ class _UniqueKeyLoader(yaml.SafeLoader):
             # `<<` is an instruction, not a key: it carries the merge tag, which has
             # no constructor, so constructing it would raise. Repeating it is legal
             # too — each occurrence merges another anchor — so it is skipped rather
-            # than counted. `super()` resolves it in `flatten_mapping` afterwards.
+            # than counted. `flatten_mapping` resolves it, and the override below
+            # makes sure what it pulls in was checked as well.
             if key_node.tag == "tag:yaml.org,2002:merge":
                 continue
             key = self.construct_object(key_node, deep=deep)
             if key in seen:
                 raise _DuplicateKeyError(key, key_node.start_mark)
             seen.append(key)
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        """Construct a mapping, refusing a key that was already seen.
+
+        The scan runs on the mapping as it was *written*, before `super()` resolves
+        any merge key. That order is the whole point: after the merge, a key that was
+        inherited and then deliberately overridden appears twice in the same list, so
+        a later scan would report the most ordinary correct use of `<<` as a
+        duplicate. Scanning first lets an author inherit a key and override it, while
+        two literally repeated keys are still refused.
+        """
+        self._refuse_duplicates(node, deep)
         return super().construct_mapping(node, deep=deep)
+
+    def flatten_mapping(self, node: yaml.MappingNode) -> None:
+        """Resolve merge keys, checking each source mapping on the way in.
+
+        Without this override a duplicate could be smuggled in through an anchor
+        written *at* the merge site (`<<: &defaults {…}`), because PyYAML descends
+        into a merge source by calling `flatten_mapping` on it, never
+        `construct_mapping` — so the scan above would never see that mapping. Its
+        repeated key would then be resolved by the plain last-one-wins rule and
+        silently change what a view exposes: exactly the failure this loader exists
+        to prevent. An anchor that is also bound to an ordinary key is checked twice,
+        which costs nothing and yields the same answer.
+
+        Recursion needs no special handling: `super()` calls `self.flatten_mapping`
+        for nested merges, which lands here again.
+        """
+        for key_node, value_node in node.value:
+            if key_node.tag != "tag:yaml.org,2002:merge":
+                continue
+            # `<<: *one` is a mapping; `<<: [*one, *two]` is a sequence of them.
+            sources = (
+                value_node.value if isinstance(value_node, yaml.SequenceNode) else [value_node]
+            )
+            for source in sources:
+                if isinstance(source, yaml.MappingNode):
+                    self._refuse_duplicates(source, deep=False)
+        super().flatten_mapping(node)
 
 
 class FieldSpec(BaseModel):

@@ -282,7 +282,10 @@ A merge key is not affected. `<<: *anchor` is the one place where the same name 
 appear twice — once inherited, once overridden — and YAML gives the explicit value
 priority. The check looks at the mapping as it was written, before the merge is
 resolved, so inheriting a view's defaults and overriding one of them is allowed while
-two literally repeated keys are still refused:
+two literally repeated keys are still refused. Merging is not a way around the check:
+every mapping a merge pulls in is checked as well, wherever it is written — bound to
+an ordinary key, spelled out at the merge site, listed in a `<<: [*one, *two]`
+sequence, or reached through a merge nested in another merge.
 
 ```yaml
 defaults: &defaults
