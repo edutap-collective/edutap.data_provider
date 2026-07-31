@@ -87,6 +87,61 @@ def test_malformed_yaml_is_fatal(tmp_path):
         load_config(write(tmp_path, text))
 
 
+def test_a_duplicate_view_name_is_fatal(tmp_path):
+    """A copy-pasted view block must not silently win over the first one.
+
+    `yaml.safe_load` keeps the last of two identically named keys, so the service
+    would start happily and serve a definition nobody meant to deploy.
+    """
+    text = (
+        CONFIG
+        + """
+  mensapass:
+    fields:
+      display_name: [STRING]
+"""
+    )
+    with pytest.raises(ConfigError, match="mensapass"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_duplicate_field_name_inside_a_view_is_fatal(tmp_path):
+    """The same silent overwrite one level down is just as wrong."""
+    text = CONFIG.replace(
+        "      mail: [STRING, TEXT, LINK]",
+        "      mail: [STRING, TEXT, LINK]\n      surname: [STRING]",
+    )
+    with pytest.raises(ConfigError, match="surname"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_duplicate_constant_is_fatal(tmp_path):
+    text = CONFIG.replace(
+        "  open_ended: 9999-12-31",
+        "  open_ended: 9999-12-31\n  open_ended: 2000-01-01",
+    )
+    with pytest.raises(ConfigError, match="open_ended"):
+        load_config(write(tmp_path, text))
+
+
+def test_the_duplicate_message_points_at_the_file(tmp_path):
+    """Whoever edits the YAML needs the file and the key, not a parser trace."""
+    text = (
+        CONFIG
+        + """
+  mensapass:
+    fields:
+      display_name: [STRING]
+"""
+    )
+    with pytest.raises(ConfigError) as error:
+        load_config(write(tmp_path, text))
+    message = str(error.value)
+    assert "views.yaml" in message
+    assert "mensapass" in message
+    assert "duplicate" in message.lower()
+
+
 def test_fields_accept_the_long_mapping_form(tmp_path):
     text = CONFIG.replace(
         "      surname: [STRING, TEXT]",
