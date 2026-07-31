@@ -357,3 +357,31 @@ views:
 """
     with pytest.raises(ConfigError, match="fields"):
         load_config(write(tmp_path, text))
+
+
+def test_two_anchors_defining_one_key_follow_yaml_precedence(tmp_path):
+    """Not a duplicate: this is inheritance, and YAML decides who wins.
+
+    `<<: [*one, *two]` takes the key from the earlier source, and an explicit key
+    beats any merged one. Refusing this would make the sequence form useless, which
+    is the whole reason it exists. The check refuses one mapping naming a key twice
+    *in the file*; it does not arbitrate between two anchors that each name it once.
+    """
+    text = """
+defaults:
+  public: &public
+    surname: [STRING]
+    mail: [STRING, LINK]
+  internal: &internal
+    surname: [STRING, TEXT]
+
+views:
+  directory:
+    description: Public listing
+    fields:
+      <<: [*public, *internal]
+"""
+    config = load_config(write(tmp_path, text))
+    fields = config.views["directory"].fields
+    assert fields["surname"].kinds == [FieldKind.STRING]
+    assert "mail" in fields
