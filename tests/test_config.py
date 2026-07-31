@@ -151,3 +151,94 @@ def test_fields_accept_the_long_mapping_form(tmp_path):
     surname = config.views["full_view"].fields["surname"]
     assert surname.kinds == [FieldKind.STRING, FieldKind.TEXT]
     assert surname.description == "Family name"
+
+
+# The regression the three marked tests below pin: `_UniqueKeyLoader.construct_mapping`
+# overrides PyYAML's own without ever calling `flatten_mapping`, so `<<` is never
+# resolved and reaches the constructor as an unhandled `tag:yaml.org,2002:merge`. A
+# document using a merge key raises instead of loading. Deliberately not fixed for
+# now. `strict=True`: whoever teaches `config.py` to resolve merge keys gets a loud
+# XPASS failure telling them to delete these markers.
+MERGE_KEYS_ARE_BROKEN = pytest.mark.xfail(
+    strict=True,
+    reason="_UniqueKeyLoader.construct_mapping never calls flatten_mapping, so a "
+    "merge key is never resolved. Known defect, deliberately unfixed.",
+)
+
+MERGE_CONFIG = """
+constants:
+  open_ended: 9999-12-31
+
+defaults: &defaults
+  description: Inherited description
+  fields:
+    surname: [STRING, TEXT]
+
+views:
+  mensapass:
+    <<: *defaults
+    description: Explicit description
+"""
+
+
+@MERGE_KEYS_ARE_BROKEN
+def test_a_merge_key_is_resolved_and_the_explicit_value_wins(tmp_path):
+    """`<<: *anchor` is valid YAML and must keep working alongside the check.
+
+    The duplicate-key check scans the mapping the author wrote. A merge key is the
+    one construct where the same name legitimately appears twice — once inherited,
+    once overridden — and YAML says the explicit one wins.
+    """
+    config = load_config(write(tmp_path, MERGE_CONFIG))
+    view = config.views["mensapass"]
+    assert view.description == "Explicit description"
+    assert view.fields["surname"].kinds == [FieldKind.STRING, FieldKind.TEXT]
+
+
+@MERGE_KEYS_ARE_BROKEN
+def test_two_merge_keys_in_one_mapping_are_not_a_duplicate(tmp_path):
+    """`<<` is not a key: repeating it merges both anchors, it does not clash."""
+    text = """
+base_one: &one
+  fields:
+    surname: [STRING]
+base_two: &two
+  derived:
+    pass_valid_until:
+      kinds: [STRING]
+      rule: today()
+
+views:
+  mensapass:
+    <<: *one
+    <<: *two
+"""
+    config = load_config(write(tmp_path, text))
+    view = config.views["mensapass"]
+    assert "surname" in view.fields
+    assert "pass_valid_until" in view.derived
+
+
+@MERGE_KEYS_ARE_BROKEN
+def test_a_genuine_duplicate_next_to_a_merge_key_is_still_fatal(tmp_path):
+    """Merging must not buy an author an exemption from the check."""
+    text = MERGE_CONFIG.replace(
+        "    description: Explicit description",
+        "    description: Explicit description\n    description: And again",
+    )
+    with pytest.raises(ConfigError, match="description"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_duplicate_inside_the_merged_mapping_is_fatal(tmp_path):
+    """The anchored mapping is a mapping of the document like any other.
+
+    It is checked where it is written, so the error names the definition site rather
+    than every place that merges it.
+    """
+    text = MERGE_CONFIG.replace(
+        "    surname: [STRING, TEXT]",
+        "    surname: [STRING, TEXT]\n    surname: [TEXT]",
+    )
+    with pytest.raises(ConfigError, match="surname"):
+        load_config(write(tmp_path, text))
