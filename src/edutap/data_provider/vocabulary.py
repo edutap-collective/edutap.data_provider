@@ -1,9 +1,14 @@
 """The eduTAP vocabulary for wallets, pass lifecycle and field kinds.
 
-Consumers COPY these values rather than importing them. Importing would point a
-consumer's dependency at the service it consumes — `edutap.pass_builder` would
-depend on the data provider. The same rule applies to the naming convention in
-`models/base.py`, for the same reason.
+A consumer that does not already depend on this package is asked to COPY these
+values rather than import them: importing would point its dependency at the service
+it consumes — `edutap.pass_builder` would depend on the data provider. The same rule
+applies to the naming convention in `models/base.py`, for the same reason.
+
+Where that dependency already exists the recommendation has nothing left to protect,
+so importing is available and supported. These three enumerations are deliberately
+re-exported from the package root (`from edutap.data_provider import WalletType`) as
+well as from this module; both spellings are public API.
 
 These spellings supersede the older ones in `edutap.pass_builder`,
 `edutap.heidi_api` and `lmu_edutap_full_view` (`APPLE`, `GOOGLE`, `SAMSUNG` with

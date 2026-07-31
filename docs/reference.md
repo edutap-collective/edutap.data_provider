@@ -11,6 +11,19 @@ the bearer token from `EDUTAP_DATA_PROVIDER_API_TOKEN`:
 Authorization: Bearer <token>
 ```
 
+How the header is checked:
+
+* The scheme is split off the credential and matched **case-insensitively**, as
+  RFC 7235 requires: `bearer`, `Bearer` and `BEARER` are the same scheme. Anything
+  else — another scheme, no scheme at all — is refused.
+* Only the credential is compared with the configured token, and that comparison
+  runs in constant time. The scheme is public framing, not a secret.
+* An **empty** credential is refused before any comparison happens, so a
+  configuration whose `EDUTAP_DATA_PROVIDER_API_TOKEN` is the empty string
+  authenticates nobody. It does not degrade into "no credential needed".
+* Every failure — no header, wrong scheme, wrong token — produces the same 401 and
+  the same message. A caller cannot tell them apart.
+
 FastAPI also serves the generated OpenAPI document at `/openapi.json` and its
 interactive form at `/docs`.
 
@@ -111,7 +124,7 @@ media type `application/problem+json`:
 
 | `title` | Status | Raised when |
 |---|---|---|
-| `Unauthorized` | 401 | the `Authorization` header is not `Bearer <configured token>` |
+| `Unauthorized` | 401 | the `Authorization` header does not carry the configured token under the `Bearer` scheme — see [above](#http-api) for what is and is not accepted |
 | `Unknown view type` | 404 | the requested `view_type` is not in the configuration |
 | `Unknown field` | 400 | `fields` names something the catalogue does not offer |
 | `Unknown person` | 404 | no row exists for `(person_uid, view_type)` |
@@ -146,7 +159,7 @@ variables are ignored.
 
 | Variable | Type | Default | Meaning |
 |---|---|---|---|
-| `EDUTAP_DATA_PROVIDER_DATABASE_URL` | string | — required | SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:password@host/database`. The account needs `SELECT` and nothing more |
+| `EDUTAP_DATA_PROVIDER_DATABASE_URL` | secret string | — required | SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:password@host/database`. The account needs `SELECT` and nothing more. A DSN carries the password in clear text, so the value is held as a secret and does not appear in a settings repr, a traceback or a log line |
 | `EDUTAP_DATA_PROVIDER_CONFIG_PATH` | path | — required | the view configuration file, read and validated once at startup |
 | `EDUTAP_DATA_PROVIDER_API_TOKEN` | secret string | — required | the bearer token every API call must present |
 | `EDUTAP_DATA_PROVIDER_ECHO_SQL` | boolean | `false` | log every statement the engine emits; development only |
@@ -197,6 +210,8 @@ optional.
 Startup validation, all of it fatal:
 
 * the file exists, parses as YAML, and matches the model;
+* no mapping in the document repeats a key — at **every** level, not only view
+  names: the fields of one view, the constants, and any other mapping alike;
 * every view declares at least one field, stored or derived;
 * field names are flat — no dots, and nothing but letters, digits and underscores;
 * no name is both a stored and a derived field of the same view;
@@ -206,6 +221,17 @@ Startup validation, all of it fatal:
   constant — otherwise no producer would know to write it;
 * every argument in a date position of `add_days` or `days_between` provably yields a
   date, following `coalesce`, `min`, `max` and the branches of `if_else` recursively.
+
+A duplicated key is refused while the file is being read, before the model sees it,
+because YAML itself would keep only the last of the two — a copy-pasted view block
+would otherwise start the service without a word and serve the second definition. The
+message names the key and the line:
+
+```text
+Duplicate key 'mensapass' in the view configuration: /etc/edutap/views.yaml, line 14.
+YAML keeps only the last of two identical keys, so one of the two definitions would be
+ignored without a word. Remove or rename one of them.
+```
 
 ## Rule functions
 
@@ -219,7 +245,7 @@ references, named constants and literals — nothing else parses.
 | `coalesce(a, …)` | 1 or more | any | the first argument that is not `null`, else `null` |
 | `if_else(condition, then, otherwise)` | 3 | any | evaluates only the branch it takes |
 | `exists(field)` | 1 | boolean | whether the payload carries that key. The argument must be a bare field name; anything else is `false` |
-| `is_null(a)` | 1 | boolean | `a` is `null` |
+| `is_null(a)` | 1 | boolean | `a` is `null` — including when the key is absent, see below |
 | `is_empty(a)` | 1 | boolean | `a` is `null`, `""`, `[]` or `{}` |
 | `eq(a, b)` | 2 | boolean | `a == b` |
 | `lt(a, b)` | 2 | boolean | `a < b` |
@@ -237,7 +263,11 @@ parser underneath is `ast.parse`, so a rule written as `if(…)` could not be pa
 all.
 
 `exists` and `is_null` are different questions. In JSONB an absent key and a key
-holding `null` are distinct states.
+holding `null` are distinct states — but only `exists` can tell them apart. Reading a
+field yields `null` in both cases, so `is_null(x)` is `true` for a key that is missing
+just as much as for a key written as `null`. When the question is *did the producer
+write this field at all*, the answer is `exists(x)`; `is_null(x)` answers *is there a
+value here*, which is the weaker and more usual question.
 
 Fields declaring `DATETIME` are turned into real date objects before a rule runs, so
 arithmetic and comparison happen on dates rather than on strings. Only the result is
@@ -264,8 +294,18 @@ mapping rules against these when a template version is published.
 
 ## Vocabulary
 
-Consumers **copy** these values rather than importing them — importing would point a
-consumer's dependency at the service it consumes.
+Two enumerations. A consumer may either copy their values or import them, and which
+of the two is right follows from whether it already depends on this package:
+
+* A consumer that must **not** depend on the data provider — `edutap.pass_builder`,
+  say — **copies** the values. Importing them would point its dependency at the
+  service it consumes.
+* A consumer that already depends on this package **imports** them, from the package
+  root or from the submodule; both are part of the public API:
+
+  ```python
+  from edutap.data_provider import PassLifecycleState, WalletType
+  ```
 
 `WalletType`: `GOOGLE_ST`, `GOOGLE_ACCESS`, `APPLE_VAS`, `APPLE_ACCESS`,
 `APPLE_IDENTITY`, `SAMSUNG_ST`, `SAMSUNG_ACCESS`.
@@ -342,4 +382,5 @@ The HTTP API does not expose `pass_state`. It is read through the
 |---|---|
 | `edutap.data_provider.api.app:create_app` | the FastAPI application factory; run it with `uvicorn … --factory` |
 | `edutap.data_provider.models.dbdef:definition` | the `SchemaDefinition` announced to `edutap.db_definitions` |
-| `edutap.data_provider.vocabulary` | `WalletType`, `PassLifecycleState`, `FieldKind` |
+| `edutap.data_provider` | the package root re-exports `WalletType`, `PassLifecycleState`, `FieldKind` and `__version__` |
+| `edutap.data_provider.vocabulary` | where those three enumerations are defined |

@@ -131,17 +131,34 @@ programmes, employments, organisational units — must decide how to flatten the
 That decision belongs to the producer: the catalogue simply declares whatever it
 writes.
 
-## Why the vocabulary is copied rather than imported
+## Why copying the vocabulary is recommended, and when importing is right
 
-`WalletType` and `PassLifecycleState` exist here as `StrEnum`s, and consumers are
-asked to **copy** the values instead of importing this package.
+`WalletType` and `PassLifecycleState` exist here as `StrEnum`s. They are exported
+from the package root as well as from `edutap.data_provider.vocabulary`, so a
+consumer can import them — and the recommendation is nevertheless that most
+consumers **copy** the values instead.
 
-Importing would invert a dependency. `edutap.pass_builder` consumes this service; if
+The reason is a dependency direction. `edutap.pass_builder` consumes this service; if
 it imported the vocabulary from here, its dependency would point at the thing it
 consumes, and a version bump on the provider would ripple into every consumer's
-resolution. The same rule — and the same reason — applies to the naming convention
-this package copies from `edutap.db_definitions`, and to keeping
-`edutap.db_definitions` itself a development dependency that is never deployed.
+resolution. A dozen short string constants are not worth that edge in the
+dependency graph. The same rule — and the same reason — applies to the naming convention this
+package copies from `edutap.db_definitions`, and to keeping `edutap.db_definitions`
+itself a development dependency that is never deployed.
+
+That reasoning only bites where the dependency would be new. A consumer that already
+depends on `edutap.data_provider` — this repository's own tests, a deployment's glue
+code, a producer written against this package — has nothing left to protect by
+copying, and for it a copy is simply a second definition that can drift. So the
+import is deliberately available and supported:
+
+```python
+from edutap.data_provider import PassLifecycleState, WalletType
+```
+
+Read the recommendation as being about the dependency, not about the import
+statement: copy when importing would create a dependency you do not want, import when
+the dependency is already there.
 
 The values are stored in text columns rather than native enums for a related reason
 at the database level: a new wallet provider must not force a migration in every

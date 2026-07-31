@@ -135,9 +135,20 @@ not enforce the values.
 
 **Where the vocabulary lives.** It exists three times today (`pass_builder` native
 enum, `edutap.heidi_api` Pydantic enums, `full_view` literals). It is defined here,
-and consumers **copy** it rather than importing it — the same rule
-`edutap.db_definitions` uses for its naming convention, and for the same reason: the
-alternative would point `pass_builder`'s dependency at the service it consumes.
+and the recommendation to a consumer is to **copy** it rather than import it — the
+same rule `edutap.db_definitions` uses for its naming convention, and for the same
+reason: importing would point `pass_builder`'s dependency at the service it consumes.
+
+*Amended 2026-07-31.* The recommendation stands, but it is a recommendation about a
+dependency and not a prohibition on an import. `WalletType`, `PassLifecycleState`
+and `FieldKind` are **deliberately** re-exported from the package root, so that
+`from edutap.data_provider import WalletType` works alongside the import from
+`edutap.data_provider.vocabulary`; both are public API. Copying is the right choice
+for a consumer that must not acquire a dependency on the service it consumes —
+`pass_builder` above all. Importing is the right choice for anything that already
+depends on this package, where a copy would only be a second definition free to
+drift. The earlier wording read as if the import should not exist; it should, and it
+does.
 
 ## View definitions and derivation rules
 
