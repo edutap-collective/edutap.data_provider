@@ -35,6 +35,31 @@ def clean_environment(monkeypatch):
     dependencies.get_repository.cache_clear()
 
 
+MINIMAL_CONFIG = """
+views:
+  mensapass:
+    fields:
+      display_name: [STRING, TEXT]
+"""
+
+
+@pytest.fixture
+def configured_environment(tmp_path, monkeypatch):
+    """Point the process at a minimal, valid configuration; return the file.
+
+    `create_app` resolves the settings and the view configuration while it builds,
+    so even a test that only wants an application object needs both to be there.
+    The autouse `clean_environment` fixture runs first — pytest orders autouse
+    fixtures of a scope before the rest — so this sets what that one just cleared.
+    """
+    path = tmp_path / "views.yaml"
+    path.write_text(MINIMAL_CONFIG)
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_DATABASE_URL", "postgresql+asyncpg://u:p@h/db")
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_CONFIG_PATH", str(path))
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_API_TOKEN", "test-token")
+    return path
+
+
 @pytest.fixture(scope="session")
 def postgres_url():
     """Start a PostgreSQL container and return an asyncpg URL for it."""

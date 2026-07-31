@@ -26,7 +26,10 @@ def section_of(text, heading):
     raise AssertionError(f"docs/reference.md has no heading containing {heading!r}")
 
 
-def test_every_endpoint_is_documented():
+def test_every_endpoint_is_documented(configured_environment):
+    """`configured_environment`: `create_app` now resolves both seams while it builds,
+    so even a test that only wants the route table needs a configuration that loads.
+    """
     from edutap.data_provider.api.app import create_app
 
     # Derived from the application, never from a list kept here: a hardcoded tuple
@@ -107,7 +110,7 @@ def test_the_example_configuration_is_valid():
     validate_config(load_config(ROOT / "views.example.yaml"))
 
 
-def test_readme_mentions_no_endpoint_that_does_not_exist():
+def test_readme_mentions_no_endpoint_that_does_not_exist(configured_environment):
     from edutap.data_provider.api.app import create_app
 
     # The OpenAPI document, not `app.routes`: since Starlette 1.3 an included router
