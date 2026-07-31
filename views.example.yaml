@@ -1,0 +1,36 @@
+# Example view configuration for edutap.data_provider.
+#
+# The path to this file is `EDUTAP_DATA_PROVIDER_CONFIG_PATH`. It is read once at
+# startup and validated there; every problem below is fatal before the first request.
+
+constants:
+  # LMU writes an unlimited role as this date rather than as a missing value.
+  # Another site may use a different sentinel — it is configuration, not a constant
+  # of the package.
+  open_ended: 9999-12-31
+
+views:
+  full_view:
+    description: Complete person record as the producer writes it
+    fields:
+      eduperson_principal_name: [STRING, TEXT, NFC]
+      given_name: [STRING, TEXT]
+      surname: [STRING, TEXT]
+      mail: [STRING, TEXT, LINK]
+      eduperson_affiliation: [STRING, TEXT]
+
+  mensapass:
+    description: What the canteen pass needs
+    fields:
+      eduperson_principal_name: [STRING, TEXT, NFC]
+      display_name: [STRING, TEXT]
+      student_role_valid_until: [STRING, DATETIME]
+      employee_role_valid_until: [STRING, DATETIME]
+    derived:
+      pass_valid_until:
+        kinds: [STRING, TEXT, DATETIME]
+        description: At most seven days ahead, never past the role that carries it
+        rule: >
+          min(add_days(today(), 7),
+              coalesce(student_role_valid_until, open_ended),
+              coalesce(employee_role_valid_until, open_ended))
