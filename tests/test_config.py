@@ -153,18 +153,6 @@ def test_fields_accept_the_long_mapping_form(tmp_path):
     assert surname.description == "Family name"
 
 
-# The regression the three marked tests below pin: `_UniqueKeyLoader.construct_mapping`
-# overrides PyYAML's own without ever calling `flatten_mapping`, so `<<` is never
-# resolved and reaches the constructor as an unhandled `tag:yaml.org,2002:merge`. A
-# document using a merge key raises instead of loading. Deliberately not fixed for
-# now. `strict=True`: whoever teaches `config.py` to resolve merge keys gets a loud
-# XPASS failure telling them to delete these markers.
-MERGE_KEYS_ARE_BROKEN = pytest.mark.xfail(
-    strict=True,
-    reason="_UniqueKeyLoader.construct_mapping never calls flatten_mapping, so a "
-    "merge key is never resolved. Known defect, deliberately unfixed.",
-)
-
 MERGE_CONFIG = """
 constants:
   open_ended: 9999-12-31
@@ -181,7 +169,6 @@ views:
 """
 
 
-@MERGE_KEYS_ARE_BROKEN
 def test_a_merge_key_is_resolved_and_the_explicit_value_wins(tmp_path):
     """`<<: *anchor` is valid YAML and must keep working alongside the check.
 
@@ -195,7 +182,6 @@ def test_a_merge_key_is_resolved_and_the_explicit_value_wins(tmp_path):
     assert view.fields["surname"].kinds == [FieldKind.STRING, FieldKind.TEXT]
 
 
-@MERGE_KEYS_ARE_BROKEN
 def test_two_merge_keys_in_one_mapping_are_not_a_duplicate(tmp_path):
     """`<<` is not a key: repeating it merges both anchors, it does not clash."""
     text = """
@@ -219,7 +205,6 @@ views:
     assert "pass_valid_until" in view.derived
 
 
-@MERGE_KEYS_ARE_BROKEN
 def test_a_genuine_duplicate_next_to_a_merge_key_is_still_fatal(tmp_path):
     """Merging must not buy an author an exemption from the check."""
     text = MERGE_CONFIG.replace(

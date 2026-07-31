@@ -36,12 +36,26 @@ class _UniqueKeyLoader(yaml.SafeLoader):
     """
 
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
-        """Construct a mapping, refusing a key that was already seen."""
+        """Construct a mapping, refusing a key that was already seen.
+
+        The scan runs on the mapping as it was *written*, before `super()` resolves
+        any merge key. That order is the whole point. `flatten_mapping` appends the
+        inherited pairs into the same list, so a scan afterwards would see an
+        overridden key twice and report the most ordinary correct use of `<<` as a
+        duplicate. Scanning first means an author can inherit a key and override it,
+        while two literally repeated keys are still refused.
+        """
         # A list, not a set: a key need not be hashable at this point, and an
         # unhashable one must reach PyYAML's own error rather than raise TypeError
         # here. Configuration documents are small, so the linear scan costs nothing.
         seen: list[Any] = []
         for key_node, _ in node.value:
+            # `<<` is an instruction, not a key: it carries the merge tag, which has
+            # no constructor, so constructing it would raise. Repeating it is legal
+            # too — each occurrence merges another anchor — so it is skipped rather
+            # than counted. `super()` resolves it in `flatten_mapping` afterwards.
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                continue
             key = self.construct_object(key_node, deep=deep)
             if key in seen:
                 raise _DuplicateKeyError(key, key_node.start_mark)

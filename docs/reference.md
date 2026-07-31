@@ -278,6 +278,24 @@ YAML keeps only the last of two identical keys, so one of the two definitions wo
 ignored without a word. Remove or rename one of them.
 ```
 
+A merge key is not affected. `<<: *anchor` is the one place where the same name may
+appear twice — once inherited, once overridden — and YAML gives the explicit value
+priority. The check looks at the mapping as it was written, before the merge is
+resolved, so inheriting a view's defaults and overriding one of them is allowed while
+two literally repeated keys are still refused:
+
+```yaml
+defaults: &defaults
+  description: Inherited description
+  fields:
+    surname: [STRING, TEXT]
+
+views:
+  mensapass:
+    <<: *defaults
+    description: Explicit description   # wins over the inherited one
+```
+
 ## Rule functions
 
 The complete language. A rule is one expression built from these calls, field
