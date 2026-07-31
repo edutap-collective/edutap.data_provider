@@ -1,9 +1,13 @@
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from edutap.data_provider.api.app import create_app
 from edutap.data_provider.api.dependencies import get_provider_config
 from edutap.data_provider.config import load_config
+from edutap.data_provider.settings import Settings, get_settings
 
 CONFIG = """
 views:
@@ -114,16 +118,26 @@ def test_the_scheme_is_matched_case_insensitively(client):
     assert response.status_code == 200
 
 
-def test_an_empty_configured_token_authenticates_nobody(tmp_path, monkeypatch):
-    """An empty token must not turn into "no credential needed"."""
-    path = tmp_path / "views.yaml"
-    path.write_text(CONFIG)
-    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_DATABASE_URL", "postgresql+asyncpg://u:p@h/db")
-    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_CONFIG_PATH", str(path))
-    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_API_TOKEN", "")
-    app = create_app()
-    app.dependency_overrides[get_provider_config] = lambda: load_config(path)
-    client = TestClient(app)
+def test_an_empty_configured_token_authenticates_nobody(client):
+    """The guard in `require_token` is a second barrier, not the only one.
+
+    The settings now refuse an empty token outright, so a process configured this
+    way never starts — `tests/test_app_skeleton.py` covers that. The guard stays
+    because it holds the invariant where it is enforced, without depending on a
+    constraint declared in another module: `secrets.compare_digest(b"", b"")` is
+    true, so an unguarded comparison would turn an empty expected token into "no
+    credential needed".
+
+    `model_construct` skips validation. It is the only way left to reach
+    `require_token` with the settings the constraint now forbids — which is exactly
+    the state this guard exists for.
+    """
+    unvalidated = Settings.model_construct(
+        database_url=SecretStr("postgresql+asyncpg://u:p@h/db"),
+        config_path=Path("views.yaml"),
+        api_token=SecretStr(""),
+    )
+    client.app.dependency_overrides[get_settings] = lambda: unvalidated
     for headers in ({}, {"Authorization": "Bearer "}, {"Authorization": "Bearer"}):
         response = client.get("/catalogue", params={"view_type": "mensapass"}, headers=headers)
         assert response.status_code == 401, headers

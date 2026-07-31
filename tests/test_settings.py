@@ -39,3 +39,20 @@ def test_missing_required_settings_fail_loudly(monkeypatch):
     # somehow", not "fails with this specific class".
     with pytest.raises(Exception):  # noqa: B017
         Settings()
+
+
+def test_an_empty_api_token_is_refused(monkeypatch):
+    """A configured token of "" would start a service that can serve nobody.
+
+    The request-time guard in `api.auth` already refuses an empty credential, so
+    such a deployment was never *open* — it was silently closed, on every request,
+    forever. The defect belongs where it can be seen: at settings load, which
+    `create_app` performs while it builds.
+    """
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_DATABASE_URL", "postgresql+asyncpg://u:p@h/db")
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_CONFIG_PATH", "/etc/views.yaml")
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_API_TOKEN", "")
+    # Generic in the class, specific in the message, for the reason given above:
+    # what is under test is that it fails and says why, not which class carries it.
+    with pytest.raises(Exception, match="must not be empty"):
+        Settings()

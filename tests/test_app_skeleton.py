@@ -119,3 +119,18 @@ def test_the_startup_check_fills_the_cache_the_request_path_reads(configured_env
 
     assert get_settings.cache_info().misses == 1
     assert get_provider_config.cache_info().misses == 1
+
+
+def test_an_empty_api_token_stops_the_application_from_being_built(monkeypatch, tmp_path):
+    """The settings constraint and the startup check together: a refusal, visibly.
+
+    On its own, an empty token was refused only per request, silently. On its own,
+    the startup check cannot see a value the settings accept.
+    """
+    path = tmp_path / "views.yaml"
+    path.write_text("views:\n  mensapass:\n    fields:\n      display_name: [STRING]\n")
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_DATABASE_URL", "postgresql+asyncpg://u:p@h/db")
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_CONFIG_PATH", str(path))
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_API_TOKEN", "")
+    with pytest.raises(StartupError, match="EDUTAP_DATA_PROVIDER_API_TOKEN"):
+        create_app()
