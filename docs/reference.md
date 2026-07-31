@@ -18,9 +18,12 @@ How the header is checked:
   else — another scheme, no scheme at all — is refused.
 * Only the credential is compared with the configured token, and that comparison
   runs in constant time. The scheme is public framing, not a secret.
-* An **empty** credential is refused before any comparison happens, so a
-  configuration whose `EDUTAP_DATA_PROVIDER_API_TOKEN` is the empty string
-  authenticates nobody. It does not degrade into "no credential needed".
+* An **empty** credential is refused before any comparison happens. Without that,
+  `compare_digest("", "")` would be true and an empty configured token would degrade
+  into "no credential needed". A deployment cannot reach that state in the first
+  place — an empty `EDUTAP_DATA_PROVIDER_API_TOKEN` [stops the process at
+  startup](#startup) — but the check holds the invariant where it is enforced,
+  rather than trusting a constraint declared in another module.
 * Every failure — no header, wrong scheme, wrong token — produces the same 401 and
   the same message. A caller cannot tell them apart.
 
@@ -35,7 +38,11 @@ No authentication, no parameters.
 |---|---|---|
 | 200 | `application/json` | `{"status": "ok"}` |
 
-It reports that the process is up. It does not touch the database.
+It reports that the process is up: liveness, not readiness. Answering at all already
+carries information, because the process only exists if its settings and its view
+configuration loaded — see [startup](#startup). It says nothing about the database:
+nothing on this path opens a connection, so a service whose database is unreachable
+still answers `{"status": "ok"}` here and fails a `/lookup` with a 500.
 
 ### `GET /catalogue`
 
@@ -161,10 +168,47 @@ variables are ignored.
 |---|---|---|---|
 | `EDUTAP_DATA_PROVIDER_DATABASE_URL` | secret string | — required | SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:password@host/database`. The account needs `SELECT` and nothing more. A DSN carries the password in clear text, so the value is held as a secret and does not appear in a settings repr, a traceback or a log line |
 | `EDUTAP_DATA_PROVIDER_CONFIG_PATH` | path | — required | the view configuration file, read and validated once at startup |
-| `EDUTAP_DATA_PROVIDER_API_TOKEN` | secret string | — required | the bearer token every API call must present |
+| `EDUTAP_DATA_PROVIDER_API_TOKEN` | secret string | — required | the bearer token every API call must present. Must not be empty: an empty token authenticates nobody, so the process refuses to start |
 | `EDUTAP_DATA_PROVIDER_ECHO_SQL` | boolean | `false` | log every statement the engine emits; development only |
 
-A missing required variable stops the process at startup.
+## Startup
+
+`create_app` resolves the settings and the view configuration while it builds the
+application, before the server binds a port. Neither is left to the first request: a
+process whose configuration is unusable must not start, answer `/healthz` and satisfy
+a health-check-based deployment while every real request fails.
+
+Fatal, therefore:
+
+* a required variable is missing;
+* `EDUTAP_DATA_PROVIDER_API_TOKEN` is present but empty;
+* the view configuration is missing, is not valid YAML, or fails any of the checks
+  listed under [view configuration](#view-configuration).
+
+The failure is an `edutap.data_provider.api.app.StartupError`, and the process does
+not come up. What an operator sees for a missing variable:
+
+```text
+edutap.data_provider.api.app.StartupError: The service cannot start: its settings are unusable.
+
+  EDUTAP_DATA_PROVIDER_CONFIG_PATH: Field required
+
+Set these in the environment or in a .env file next to the process. No value is shown above on purpose: the settings carry the API token and the database password.
+```
+
+and for a view configuration the startup type check refuses:
+
+```text
+edutap.data_provider.api.app.StartupError: The service cannot start: the view configuration is unusable.
+
+  Invalid view configuration:
+  mensapass.pass_valid_until: add_days() needs a date, but 'display_name' does not declare DATETIME.
+```
+
+No setting value appears in either message, and pydantic's own `ValidationError` is
+deliberately kept out of the traceback: it renders the raw settings mapping — every
+value as it was read, before `SecretStr` ever sees it — so one missing variable would
+otherwise print the API token and the database password into the startup log.
 
 ## View configuration
 
@@ -207,7 +251,8 @@ A stored field is written either in short form, `name: [KIND, …]`, or in long 
 A derived field is always a mapping and requires `kinds` and `rule`; `description` is
 optional.
 
-Startup validation, all of it fatal:
+Startup validation, all of it fatal and all of it performed by `create_app`
+(see [startup](#startup)):
 
 * the file exists, parses as YAML, and matches the model;
 * no mapping in the document repeats a key — at **every** level, not only view

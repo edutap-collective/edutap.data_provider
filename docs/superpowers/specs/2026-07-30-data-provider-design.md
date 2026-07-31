@@ -260,6 +260,17 @@ field that is neither declared nor produced elsewhere, no duplicate view names, 
 collision between a derived and a declared field name, and every date function
 applied only to `DATETIME` fields.
 
+*Note, added during implementation.* "At startup" is carried by `create_app`, which
+resolves the settings and the view configuration while it builds the application. It
+had to be said explicitly: both hang off FastAPI's `Depends` and would otherwise
+resolve on the first request, so a misconfigured container would start, answer
+`/healthz` and pass a health check while failing every real call. The settings are
+part of that check — a required variable that is missing, or an
+`EDUTAP_DATA_PROVIDER_API_TOKEN` that is present but empty, is as fatal as a broken
+rule. The message an operator gets is shaped by hand from pydantic's error `loc` and
+`msg`, never from its rendering: that one prints the raw settings mapping, API token
+and database password included.
+
 ## API
 
 Bearer authentication, errors as `application/problem+json`.
