@@ -17,41 +17,22 @@ def clean_environment(monkeypatch):
     `get_settings`, `get_provider_config` and `get_repository` are lru_cached: without
     clearing them a test would silently run against the previous test's environment,
     and the failure would look like a logic bug rather than a fixture bug.
-
-    `edutap.data_provider.api.dependencies` (Task 9) does not exist yet at this
-    point in the build: the import is guarded so this fixture works both now and
-    once that module lands. Task 9 can drop the guard once the module is real.
-
-    The guard catches `ImportError`, not the narrower `ModuleNotFoundError`:
-    `from package import missing_submodule` raises a plain `ImportError`
-    ("cannot import name") when `package` exists but the submodule file does
-    not, because Python falls back to an attribute lookup on the already
-    imported package before it would ever get to a `ModuleNotFoundError` for
-    a genuinely absent top-level module. `ModuleNotFoundError` is a subclass
-    of `ImportError`, so this guard also still catches that narrower case.
     """
     for name in _ENVIRONMENT:
         monkeypatch.delenv(name, raising=False)
 
     from edutap.data_provider import settings as settings_module
+    from edutap.data_provider.api import dependencies
 
     settings_module.get_settings.cache_clear()
-
-    try:
-        from edutap.data_provider.api import dependencies
-    except ImportError:
-        dependencies = None
-
-    if dependencies is not None:
-        dependencies.get_provider_config.cache_clear()
-        dependencies.get_repository.cache_clear()
+    dependencies.get_provider_config.cache_clear()
+    dependencies.get_repository.cache_clear()
 
     yield
 
     settings_module.get_settings.cache_clear()
-    if dependencies is not None:
-        dependencies.get_provider_config.cache_clear()
-        dependencies.get_repository.cache_clear()
+    dependencies.get_provider_config.cache_clear()
+    dependencies.get_repository.cache_clear()
 
 
 @pytest.fixture(scope="session")
