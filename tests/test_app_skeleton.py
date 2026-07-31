@@ -76,6 +76,13 @@ def test_the_startup_failure_shows_no_secret(monkeypatch, tmp_path):
     assert "dbpassword" not in rendered
     assert "EDUTAP_DATA_PROVIDER_CONFIG_PATH" in rendered
 
+    # Not only hidden from the rendering: absent from the object graph. `raise ...
+    # from None` would set `__suppress_context__` and still leave the pydantic error
+    # reachable through `__context__`, where an error reporter that walks the chain
+    # itself would find both secrets.
+    assert raised.value.__context__ is None
+    assert raised.value.__cause__ is None
+
 
 def test_a_view_configuration_that_is_not_there_stops_the_application(monkeypatch, tmp_path):
     """The settings load; the file they point at does not exist."""

@@ -69,13 +69,22 @@ def _load_configuration() -> None:
     `lru_cache`d, so this is one load that the request path then reads, rather than
     a second parallel one that could disagree with it.
     """
+    description: str | None = None
     try:
         get_settings()
     except ValidationError as error:
-        # `from None`, unlike the branch below: the pydantic error must not be part
-        # of the rendered traceback, because printing it is exactly the leak that
-        # `_describe` exists to avoid.
-        raise StartupError(_describe(error)) from None
+        description = _describe(error)
+
+    # Raised out here, with no exception being handled, so that the pydantic error
+    # is not merely hidden from the rendered traceback but genuinely absent from the
+    # object graph. `raise ... from None` inside the `except` block would set
+    # `__suppress_context__` while leaving `__context__` pointing at an error whose
+    # `str()` still carries the API token and the database password in clear text —
+    # invisible to a printed traceback, recoverable by any error-reporting or
+    # structured-logging integration that walks the chain itself.
+    if description is not None:
+        raise StartupError(description)
+
     try:
         get_provider_config()
     except ConfigError as error:
