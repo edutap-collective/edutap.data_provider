@@ -279,3 +279,81 @@ views:
 """
     with pytest.raises(ConfigError, match="fields"):
         load_config(write(tmp_path, text))
+
+
+def test_an_anchor_reused_after_its_own_merge_still_loads(tmp_path):
+    """Two levels of defaults is ordinary, and must not be read as a duplicate.
+
+    `flatten_mapping` rewrites a node in place, and PyYAML resolves every alias to
+    one shared node. Looking at a merge source a second time would therefore see the
+    already merged content, where the inherited key and its deliberate override sit
+    side by side — and would reject this correct document. Each node is examined
+    once, on the visit that still sees it as written.
+    """
+    text = """
+views:
+  base: &base
+    fields:
+      surname: [STRING]
+      mail: [STRING]
+
+  extended: &extended
+    <<: *base
+    fields:
+      surname: [STRING, TEXT]
+
+  mensapass:
+    <<: *extended
+    description: Explicit
+"""
+    config = load_config(write(tmp_path, text))
+    assert config.views["mensapass"].description == "Explicit"
+    assert config.views["mensapass"].fields["surname"].kinds == [
+        FieldKind.STRING,
+        FieldKind.TEXT,
+    ]
+
+
+def test_the_same_anchor_merged_into_two_views_still_loads(tmp_path):
+    """One shared set of defaults, used twice — the point of an anchor."""
+    text = """
+defaults:
+  inherited: &inherited
+    fields:
+      surname: [STRING]
+  shared: &shared
+    <<: *inherited
+    fields:
+      surname: [STRING, TEXT]
+
+views:
+  mensapass:
+    <<: *shared
+    description: Canteen
+  esc:
+    <<: *shared
+    description: Student card
+"""
+    config = load_config(write(tmp_path, text))
+    assert sorted(config.views) == ["esc", "mensapass"]
+    assert config.views["esc"].fields["surname"].kinds == [FieldKind.STRING, FieldKind.TEXT]
+
+
+def test_a_duplicate_inside_an_anchor_merged_twice_is_still_fatal(tmp_path):
+    """Being reused must not launder a duplicate: the first visit catches it."""
+    text = """
+defaults:
+  shared: &shared
+    fields: {surname: [STRING]}
+    fields: {mail: [STRING]}
+
+views:
+  mensapass:
+    <<: *shared
+    description: Canteen
+  esc:
+    <<: *shared
+    description: Student card
+"""
+    with pytest.raises(ConfigError, match="fields"):
+        load_config(write(tmp_path, text))
