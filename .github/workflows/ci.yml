@@ -3,6 +3,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Nothing in this repository is locked: uv.lock is git-ignored, every requirement
+  # is a lower bound, and edutap.db_definitions is a direct reference to a moving
+  # branch. A suite that passed on the last commit can therefore fail a week later
+  # with nothing changed here. Weekly, Monday morning UTC, on main only — the run
+  # that turns "some dependency broke us" from a discovery during the next piece of
+  # work into a mail on a Monday.
+  schedule:
+    - cron: "17 5 * * 1"
+# Every Python job installs into a uv virtual environment and calls the interpreter
+# inside it by path. Not `uv pip install --system`, which is what these jobs did
+# until now and why CI had never once been green: the runner's system interpreter is
+# Debian's, marked EXTERNALLY-MANAGED, so uv refuses it outright — and for the matrix
+# entries the runner has no system interpreter at all ("No system Python installation
+# found for Python 3.14"). Not `uv run` either, for the reason the Makefile gives:
+# this package declares an entry point group that uv resolves against the whole
+# environment, and a bare `uv run` can fail where sibling eduTAP packages are absent.
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -14,8 +30,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python }}
-      - run: uv pip install --system -e ".[dev]"
-      - run: pytest -v
+      - run: uv venv
+      - run: uv pip install -e ".[dev]"
+      - run: .venv/bin/python -m pytest -v
   integration:
     # The default run excludes these (addopts), so without this job the
     # database-backed behaviour would never be exercised in CI.
@@ -25,8 +42,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
-      - run: uv pip install --system -e ".[dev]"
-      - run: pytest -m integration -v
+      - run: uv venv
+      - run: uv pip install -e ".[dev]"
+      - run: .venv/bin/python -m pytest -m integration -v
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -34,7 +52,21 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
-      - run: uv pip install --system -e ".[dev]"
-      - run: ruff check src tests
-      - run: ruff format --check src tests
-      - run: ty check src
+      - run: uv venv
+      - run: uv pip install -e ".[dev]"
+      - run: .venv/bin/python -m ruff check src tests
+      - run: .venv/bin/python -m ruff format --check src tests
+      - run: .venv/bin/python -m ty check src
+  image:
+    # The test jobs above never build the image, so until this job existed a base
+    # image bump was green in CI and broken on deployment: the Dockerfile copies
+    # /usr/local/lib/python3.14/site-packages out of the build stage by name, and a
+    # newer python:*-slim moves it. The build then fails here, in the pull request
+    # that proposes the bump, which is the whole point of running it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t edutap-data-provider:ci .
+      # Building proves the COPY paths resolved. Importing proves they resolved to
+      # the package, rather than to a directory that merely exists.
+      - run: docker run --rm edutap-data-provider:ci python -c "import edutap.data_provider"

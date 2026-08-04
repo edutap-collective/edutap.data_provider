@@ -65,6 +65,16 @@ Configuration is `EDUTAP_DATA_PROVIDER_DATABASE_URL`, `..._CONFIG_PATH`,
 `..._API_TOKEN` and `..._ECHO_SQL`; `views.example.yaml` is a complete working view
 configuration.
 
+## Dependencies and CI
+
+Every requirement is a lower bound, `uv.lock` is not committed, and
+`edutap.db_definitions` is a direct reference to a moving branch — the installed set
+changes without anyone changing this repository. Renovate (the hosted app, configured
+in `renovate.json5`) proposes updates weekly, grouped and never automerged, and CI
+runs on a weekly schedule as well, so drift shows up on a Monday instead of in the
+middle of the next piece of work. CI is the test matrix over Python 3.12 to 3.14, the
+integration tests, ruff and ty, and a build of the container image.
+
 ## Consumers
 
 `edutap.pass_builder` (through its data provider client) and, later, the
