@@ -184,6 +184,76 @@ def test_the_error_still_arrives(sentry_events):
     assert "RuntimeError" in types
 
 
+def test_a_derivation_failure_does_not_carry_the_stored_value_to_the_error_tracker(
+    sentry_events, tmp_path, monkeypatch
+):
+    """Round 1 finding: a stored value that fails derivation reached Sentry anyway.
+
+    `rules._as_date` raises `RuleError(f"{value!r} is not an ISO date.")`, quoting
+    the stored value verbatim. `routers.lookup` catches that and re-raises
+    `ProblemError(500, ...) from error`. `ProblemError`'s own message never repeats
+    the value -- but sentry-sdk's Starlette integration captures an exception that
+    reaches a *registered* handler once its response carries a 5xx status, which
+    `ProblemError` does, and it sends the full `__cause__` chain, not only the
+    exception it captures directly. Measured before the fix below: the RuleError
+    rode along as a second entry in the event's `exception.values`, stored value
+    and all.
+    """
+    from edutap.data_provider.api.app import create_app
+    from edutap.data_provider.api.dependencies import get_provider_config, get_repository
+    from edutap.data_provider.config import load_config
+
+    # `min(add_days(today(), 7), coalesce(student_role_valid_until, open_ended))`:
+    # the canonical seven-day rule from `views.example.yaml`, so this reproduces a
+    # real deployment's shape rather than a rule invented for the test.
+    config_text = """
+constants:
+  open_ended: 9999-12-31
+views:
+  mensapass:
+    fields:
+      student_role_valid_until: [STRING, DATETIME]
+    derived:
+      pass_valid_until:
+        kinds: [STRING, DATETIME]
+        rule: min(add_days(today(), 7), coalesce(student_role_valid_until, open_ended))
+"""
+    config_path = tmp_path / "views.yaml"
+    config_path.write_text(config_text)
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_DATABASE_URL", "postgresql+asyncpg://u:p@h/db")
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_API_TOKEN", "test-token")
+
+    # A distinctive marker rather than a real-looking date, so a false negative
+    # (the assertion passing because the value happens to look like something else
+    # already in the event) is not possible.
+    stored_value = "02.08.2026 STORED VALUE"
+
+    class FakeRepository:
+        async def person_view(self, person_uid: str, view_type: str) -> dict:
+            return {"student_role_valid_until": stored_value}
+
+    app = create_app()
+    app.dependency_overrides[get_provider_config] = lambda: load_config(config_path)
+    app.dependency_overrides[get_repository] = lambda: FakeRepository()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/lookup",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "person_uid": PERSON_UID,
+            "view_type": "mensapass",
+            "fields": ["pass_valid_until"],
+        },
+    )
+
+    assert response.status_code == 500
+    assert sentry_events, "no event captured -- the probe proves nothing"
+    blob = json.dumps(sentry_events)
+    assert stored_value not in blob
+
+
 def test_traces_are_off_because_bugsink_discards_them():
     """Not a sampling preference: Bugsink documents that it does not accept traces."""
     assert sentry_options(ObservabilitySettings())["traces_sample_rate"] == 0
@@ -726,6 +796,76 @@ def test_a_real_span_from_the_real_app_carries_no_person_and_no_dependencies(
     assert values == {"request": {"view_type": "mensapass", "field_count": 1}}, (
         "must be exactly this -- not `config` or `repository` in any form"
     )
+
+
+def test_a_real_span_carries_the_same_pseudonym_as_the_matching_event(
+    sentry_events, configured_environment, monkeypatch
+):
+    """Round 1 finding: the positive trace path Step 4 adds had no test at all --
+    deleting the whole `person_uid`/`pseudonym` block from `scrub_request_attributes`
+    left every test in this file green. Only the no-salt negative
+    (`test_without_a_salt_no_tag_is_attached`) was pinned.
+
+    Driven against the real app, like
+    `test_a_real_span_from_the_real_app_carries_no_person_and_no_dependencies`, so
+    this is not a probe conveniently shaped to pass. Asserts the exact digest
+    `pseudonym` computes -- not just that some string was added -- so a mapper that
+    added a *different* value under the `"person"` key would still fail this test.
+
+    `sentry_events` is not asserted on here, but is not decoration either. Found
+    while writing this test: `routers.lookup` calls `sentry_sdk.set_tag`
+    unconditionally whenever a salt is configured, whether or not a Sentry client
+    is active. Sentry's Starlette integration forks a fresh isolation scope per
+    request -- which is what keeps that tag from one request bleeding into the
+    next -- but that forking only engages once `sentry_sdk.init()` has run at
+    least once. A first version of this test, without `sentry_events`, ran its
+    request with no client active at all: `set_tag` then mutated the ambient,
+    never-reset scope directly, and that stale "person" tag rode along into
+    `test_without_a_salt_no_tag_is_attached` (also in this file, run afterwards)
+    on the strength of Sentry's own scope-forking copying the parent's tags
+    forward. `sentry_events` calling `sentry_sdk.init()` is what makes this
+    request behave like a real one against a configured backend, matching how
+    every other test in this file that exercises `routers.lookup` is built.
+    """
+    from edutap.data_provider.api.app import create_app
+    from edutap.data_provider.observability import (
+        ObservabilitySettings,
+        pseudonym,
+        scrub_request_attributes,
+    )
+
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT", "a-salt")
+    from edutap.data_provider import observability
+
+    observability.get_observability_settings.cache_clear()
+
+    exporter = InMemorySpanExporter()
+    logfire.configure(
+        send_to_logfire=False,
+        console=False,
+        additional_span_processors=[SimpleSpanProcessor(exporter)],
+    )
+
+    app = create_app()
+    logfire.instrument_fastapi(app, request_attributes_mapper=scrub_request_attributes)
+
+    TestClient(app, raise_server_exceptions=False).post(
+        "/lookup",
+        headers={"Authorization": "Bearer test-token"},
+        json={"person_uid": PERSON_UID, "view_type": "mensapass", "fields": ["display_name"]},
+    )
+
+    spans = exporter.get_finished_spans()
+    lookup_spans = [span for span in spans if "fastapi.arguments.values" in span.attributes]
+    assert lookup_spans, "no span carried the FastAPI arguments attribute"
+
+    values = json.loads(lookup_spans[0].attributes["fastapi.arguments.values"])
+
+    expected = pseudonym(
+        PERSON_UID, ObservabilitySettings(pseudonym_salt=SecretStr("a-salt")).pseudonym_salt
+    )
+    assert values == {"request": {"view_type": "mensapass", "field_count": 1, "person": expected}}
+    assert PERSON_UID not in json.dumps(values)
 
 
 def test_a_rejected_request_does_not_echo_the_body_through_its_error():
