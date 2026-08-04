@@ -10,10 +10,13 @@ wire rather than from a backend's recommendation. The measurements are recorded 
 
 import hashlib
 import hmac
+import logging
 from functools import lru_cache
 
+import sentry_sdk
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sentry_sdk.utils import BadDsn
 
 
 def pseudonym(person_uid: str, salt: SecretStr | None) -> str | None:
@@ -68,3 +71,70 @@ class ObservabilitySettings(BaseSettings):
 def get_observability_settings() -> ObservabilitySettings:
     """Return the process-wide observability settings."""
     return ObservabilitySettings()
+
+
+def sentry_options(settings: ObservabilitySettings) -> dict[str, object]:
+    """Return the options that decide what leaves the process.
+
+    Each was chosen against a measurement, and the measurements are in the design
+    record. Two are worth naming here, because both contradict what the backend's
+    own documentation recommends:
+
+    `include_local_variables=False` -- with local variables on, the raw
+    `Authorization` header sits in the ASGI scope, which is a local in most frames
+    of an ASGI stack, and the bearer token appears dozens of times in an event whose
+    rendered `authorization` header says `[Filtered]`. Sentry's scrubber matches key
+    names; it does not walk a list of byte tuples.
+
+    `max_request_body_size="never"` -- for this service the request body *is* the
+    identifying datum, so there is no partial version of this.
+
+    Returned as a mapping rather than applied inline so a test can configure a fake
+    transport with exactly these options, and cannot pass by being stricter than the
+    service.
+    """
+    return {
+        "environment": settings.environment,
+        # Bugsink states that it "intentionally does not support traces". Traces go
+        # to the OTLP collector instead; nothing travels both paths.
+        "traces_sample_rate": 0,
+        "send_default_pii": False,
+        "include_local_variables": False,
+        "max_request_body_size": "never",
+    }
+
+
+def install_observability(settings: ObservabilitySettings) -> None:
+    """Configure error reporting and tracing, or configure nothing at all.
+
+    Never raises. An error tracker that stops the service from starting has inverted
+    its own purpose, so a misconfigured backend must cost telemetry and nothing else.
+
+    The guard is narrow, and it is not speculative. Measured: an *unreachable* DSN
+    initialises fine and fails later in the background, while a *malformed* one --
+    `sentry_sdk.init("bugsink.example/1")`, a missing public key, one typo in a
+    deployment variable -- raises `BadDsn` from `init` itself and would take the
+    whole service down with it. logfire was measured under the analogous
+    misconfiguration, an unparseable endpoint, and does not raise from `configure`,
+    so it gets no guard it does not need.
+    """
+    dsn = settings.sentry_dsn.get_secret_value() if settings.sentry_dsn else ""
+    if dsn:
+        try:
+            # `sentry_options` returns `dict[str, object]` so it can be reused as a
+            # fixed mapping in tests; spreading it against `sentry_sdk.init`'s many
+            # narrowly typed keyword parameters is exactly what a plain dict cannot
+            # express to a type checker, hence the ignore rather than a change to
+            # what the dict actually carries.
+            sentry_sdk.init(
+                dsn=dsn,
+                **sentry_options(settings),  # ty: ignore[invalid-argument-type]
+            )
+        except BadDsn:
+            # `logging`, not `raise`: the service must come up. The DSN is a
+            # credential, so the message names the variable to go and fix and never
+            # the value that is wrong with it.
+            logging.getLogger(__name__).error(
+                "EDUTAP_DATA_PROVIDER_SENTRY_DSN is not a valid DSN; "
+                "error reporting is disabled for this process."
+            )

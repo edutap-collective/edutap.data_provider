@@ -4,6 +4,7 @@ from fastapi import APIRouter, FastAPI
 from pydantic import ValidationError
 
 from ..config import ConfigError
+from ..observability import get_observability_settings, install_observability
 from ..settings import Settings, get_settings
 from .dependencies import get_provider_config
 from .errors import install_error_handlers
@@ -95,6 +96,11 @@ def _load_configuration() -> None:
 
 def create_app() -> FastAPI:
     """Build the FastAPI application, or refuse to build a misconfigured one."""
+    # First, before the settings this service needs to run are even resolved. A
+    # process that refuses to start is exactly the event an operator wants to see,
+    # and reporting it is safe here: `_describe` renders only `loc` and `msg`, and
+    # the pydantic error carrying the token and the DSN is not in the object graph.
+    install_observability(get_observability_settings())
     _load_configuration()
     app = FastAPI(title="eduTAP data provider", version="0.1.0")
     install_error_handlers(app)
