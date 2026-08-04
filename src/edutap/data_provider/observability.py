@@ -127,44 +127,79 @@ def sentry_options(settings: ObservabilitySettings) -> dict[str, object]:
     }
 
 
+def _is_lookup_shaped(value: object) -> bool:
+    """Whether `value` is a `LookupRequest`, regardless of its parameter name.
+
+    Judged structurally rather than by name, because the name is not load-bearing:
+    `/lookup`'s body parameter is called `request`, not `body` (`api/routers.py`),
+    so a mapper that keys off the literal string `"body"` never fires against the
+    real application -- measured directly against `create_app()`, where
+    `fastapi.arguments.values` held the whole `config`, a `repository` object repr,
+    and the person's uid under the key `request`, none of it touched. `view_type`
+    and `fields` are the two attributes this module ever reads off the object, so
+    they are also the two it checks for.
+    """
+    return hasattr(value, "view_type") and hasattr(value, "fields")
+
+
 def scrub_request_attributes(request: object, attributes: dict) -> dict:
-    """Replace a recorded request body, and its validation errors, with their shape.
+    """Replace every recorded endpoint argument, and validation error, with its shape.
 
     logfire's FastAPI instrumentation records two things as span attributes on every
     request: the validated endpoint arguments (`values`) and, on a rejected request,
     the raw Pydantic errors that rejected it (`errors`). For `/lookup` both can carry
     a `person_uid`, so neither raw mapping can be exported.
 
+    `values` is keyed by parameter name, and parameter names are not a boundary
+    this module controls -- a body parameter can be called `request`, `payload`,
+    `lookup_request`, anything a future endpoint author chooses, and a query
+    parameter could be named `person_uid` directly. So every entry is judged by
+    what it *is*, not what it is called, and unrecognised is the default outcome,
+    not passed-through:
+
+    - a `LookupRequest`-shaped value (`_is_lookup_shaped`), under any key, reduces
+      to `{"view_type": ..., "field_count": ...}` -- which view was asked for and
+      how many fields, not who was asked about;
+    - the bare scalar under the key `"view_type"` survives unchanged, because
+      `/catalogue` receives it directly as a query parameter rather than inside a
+      body, and it is the one specific value this module knows is safe -- allow-
+      listed by name for exactly this reason: unlike a `LookupRequest`, a bare
+      string carries no structure to recognise it by, so nothing except this one
+      known-safe name is let through as one;
+    - anything else -- a FastAPI dependency such as `config` (the whole view
+      configuration) or `repository`, a parameter this module has never seen, a
+      bare scalar under any other name -- is dropped from the export entirely.
+
     The `errors` half exists because of a Pydantic detail, not a FastAPI one:
     measured directly, a "missing field" error's `input` is not the missing field's
     value -- it is the *whole enclosing dict*, because the error is reported against
     the model. A `/lookup` request missing `fields` but carrying a `person_uid`
     therefore has that `person_uid` sitting in `errors[0]["input"]` on a plain 422,
-    with no exception anywhere in the picture.
-
-    What survives is what makes a trace worth having -- which view was asked for and
-    how many fields, or which field failed validation and how -- and not who was
-    asked about. A body this function does not recognise is reduced to nothing
-    rather than passed through: a later endpoint must not become an export path
-    because no rule here happened to match it.
+    with no exception anywhere in the picture. Every error entry is reduced the same
+    way regardless of its position or the field it names: `type` and `loc` survive
+    -- which field, what kind of problem, drawn from Pydantic's own fixed error-type
+    vocabulary -- and `input` (and `msg`, which a future custom validator could put
+    a value into) does not.
     """
     values = attributes.get("values")
     result = attributes
-    if isinstance(values, dict) and "body" in values:
-        body = values["body"]
-        reduced = {
-            "view_type": getattr(body, "view_type", None),
-            "field_count": len(getattr(body, "fields", None) or []),
-        }
-        result = {**result, "values": {**values, "body": reduced}}
+    if isinstance(values, dict):
+        reduced_values: dict[str, object] = {}
+        for key, value in values.items():
+            if _is_lookup_shaped(value):
+                reduced_values[key] = {
+                    "view_type": getattr(value, "view_type", None),
+                    "field_count": len(getattr(value, "fields", None) or []),
+                }
+            elif key == "view_type" and isinstance(value, str):
+                reduced_values[key] = value
+            # Anything else -- a dependency, an unrecognised parameter, a bare
+            # scalar under any other name -- is simply not carried into
+            # `reduced_values`, which is the "dropped rather than trusted" default.
+        result = {**result, "values": reduced_values}
 
     errors = result.get("errors")
     if isinstance(errors, list):
-        # `input` is the leak: on a Pydantic "missing" error it is the whole request
-        # body, and on any other error type it is the value that failed. `type` and
-        # `loc` are what is left -- which field, what kind of problem -- and they are
-        # drawn from a small fixed vocabulary of Pydantic's own error type strings,
-        # not from anything a caller supplied.
         result = {
             **result,
             "errors": [

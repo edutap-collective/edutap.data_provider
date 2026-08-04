@@ -13,6 +13,16 @@ _ENVIRONMENT = (
     "EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT",
     "EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT",
     "EDUTAP_DATA_PROVIDER_ENVIRONMENT",
+    # Not this package's own namespace, but read directly by the OpenTelemetry SDK
+    # that `logfire.configure()` sits on top of. Review found the same hazard the
+    # comment above already names for the DSN: with this variable set in a
+    # developer's shell, `logfire.configure()` -- called both by
+    # `install_observability` and directly by the end-to-end span tests below --
+    # picks it up and adds a real network exporter alongside any
+    # `additional_span_processors` a test supplies, regardless of
+    # `EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT` above. Measured: a retry storm against
+    # an unreachable collector, roughly 30 seconds per affected test.
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
 )
 
 
