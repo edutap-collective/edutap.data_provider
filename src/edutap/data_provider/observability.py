@@ -8,10 +8,33 @@ wire rather than from a backend's recommendation. The measurements are recorded 
 `docs/superpowers/specs/2026-08-04-observability-design.md`.
 """
 
+import hashlib
+import hmac
 from functools import lru_cache
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def pseudonym(person_uid: str, salt: SecretStr | None) -> str | None:
+    """Return a keyed, truncated stand-in for a person, or nothing without a key.
+
+    Keyed rather than a plain digest: a `person_uid` comes from a directory, so the
+    value space is small and enumerable and an unsalted hash would be reversible by
+    anyone able to read the error tracker — simply by hashing the directory.
+
+    Truncated to 12 hex characters, 48 bits: wide enough that two people in one
+    installation colliding is not a practical concern, short enough that the result
+    reads as a label rather than as an identifier worth storing.
+    """
+    if salt is None:
+        return None
+    digest = hmac.new(
+        salt.get_secret_value().encode("utf-8"),
+        person_uid.encode("utf-8"),
+        hashlib.sha256,
+    )
+    return digest.hexdigest()[:12]
 
 
 class ObservabilitySettings(BaseSettings):
