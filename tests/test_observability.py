@@ -746,16 +746,24 @@ def test_configuring_sentry_does_not_configure_logfire(monkeypatch):
     comment documents), which would otherwise contaminate whichever test happens
     to run next. This test only needs to know Sentry's own init was *attempted*
     with a real dsn, not to actually configure the global SDK state.
+
+    Both halves are asserted. Review found that with only the `logfire_calls`
+    assertion, deleting the entire `sentry_sdk.init` call from
+    `install_observability` left this test green -- so it recorded nothing about
+    the call it is named after, and "configuring Sentry" was an unchecked premise
+    rather than something the test had established.
     """
     logfire_calls: list[dict] = []
+    sentry_calls: list[dict] = []
     monkeypatch.setattr(logfire, "configure", lambda **kwargs: logfire_calls.append(kwargs))
-    monkeypatch.setattr(sentry_sdk, "init", lambda **kwargs: None)
+    monkeypatch.setattr(sentry_sdk, "init", lambda **kwargs: sentry_calls.append(kwargs))
     from edutap.data_provider.observability import install_observability
 
     install_observability(
         ObservabilitySettings(sentry_dsn=SecretStr("https://public@example.invalid/1"))
     )
 
+    assert [call["dsn"] for call in sentry_calls] == ["https://public@example.invalid/1"]
     assert logfire_calls == []
 
 
@@ -882,13 +890,16 @@ def test_an_unknown_body_shape_is_reduced_rather_than_trusted():
     """Safe by default: a value this mapper does not recognise must not survive
     unchanged, not kept because no rule here happened to match it.
 
-    Rewritten after review found the original version of this test could not
-    fail: `json.dumps(..., default=str)` on an unscrubbed object renders its
-    default repr (`<Something object at 0x...>`), which never contains a class
-    attribute's value regardless of whether the mapper did anything at all -- a
-    completely no-op mapper passed the old assertion. This version checks
-    structurally that the raw object does not survive the call, which a no-op
-    mapper cannot pass.
+    Rewritten twice. The original could not fail: `json.dumps(..., default=str)`
+    on an unscrubbed object renders its default repr (`<Something object at
+    0x...>`), which never contains a class attribute's value regardless of whether
+    the mapper did anything at all -- a completely no-op mapper passed it. The
+    rewrite then swapped that for two structural assertions, both of which `None`
+    satisfies, and deleted the string check rather than keeping it. All three
+    belong, and each catches something the others do not: the membership assertion
+    is the one that says *dropped*, rather than merely replaced by something that
+    is not a `Something`; and the string assertion is the one that would catch a
+    future mapper that reduced the object to a dict of its attributes.
     """
     from edutap.data_provider.observability import scrub_request_attributes
 
@@ -899,8 +910,10 @@ def test_an_unknown_body_shape_is_reduced_rather_than_trusted():
 
     result = scrub_request_attributes(None, {"values": {"body": probe}})
 
+    assert "body" not in result["values"], "an unrecognised value must be dropped, not replaced"
     assert result["values"].get("body") is not probe
     assert not isinstance(result["values"].get("body"), Something)
+    assert "must-not-appear" not in json.dumps(result, default=str)
 
 
 def test_a_real_span_carries_no_person():
@@ -1027,6 +1040,13 @@ def test_a_real_span_carries_the_same_pseudonym_as_the_matching_event(
     forward. `sentry_events` calling `sentry_sdk.init()` is what makes this
     request behave like a real one against a configured backend, matching how
     every other test in this file that exercises `routers.lookup` is built.
+
+    That pollution can no longer happen: `routers.lookup` now guards the `set_tag`
+    call with `sentry_sdk.get_client().is_active()`, which closes the class rather
+    than this one instance (see
+    `test_no_tag_is_written_to_a_process_that_reports_nowhere`). The fixture stays
+    because the request should be shaped like a real one, not because the test
+    would otherwise contaminate its neighbours.
     """
     from edutap.data_provider.api.app import create_app
     from edutap.data_provider.observability import (
@@ -1128,6 +1148,45 @@ def test_an_event_from_lookup_carries_the_pseudonym_and_not_the_person(
         PERSON_UID, ObservabilitySettings(pseudonym_salt=SecretStr("a-salt")).pseudonym_salt
     )
     assert expected in blob
+
+
+def test_no_tag_is_written_to_a_process_that_reports_nowhere(configured_environment, monkeypatch):
+    """A salt without a DSN must leave Sentry's global state alone.
+
+    `sentry_sdk.set_tag` writes to the isolation scope, and Sentry's Starlette
+    integration is what forks a fresh one per request -- but that integration is
+    only installed by `sentry_sdk.init`. With a salt configured and no DSN, which
+    is a perfectly ordinary deployment, every single request therefore mutated one
+    ambient, never-reset, process-global scope. Inert, in that nothing reads it;
+    but the leak this branch exists to prevent is exactly "state accumulating
+    somewhere nobody is looking at", and in the test suite the same effect was
+    visible for real: a stale "person" tag rode from one test into the next.
+
+    `_tags` is private, and read here on purpose: the property under test is that
+    nothing was written at all, and sentry-sdk offers no public way to ask.
+    """
+    from edutap.data_provider import observability
+    from edutap.data_provider.api.app import create_app
+    from edutap.data_provider.api.dependencies import get_repository
+
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT", "a-salt")
+    observability.get_observability_settings.cache_clear()
+    assert not sentry_sdk.get_client().is_active(), "this test is about the no-DSN deployment"
+
+    class EmptyRepository:
+        async def person_view(self, person_uid: str, view_type: str) -> None:
+            return None
+
+    app = create_app()
+    app.dependency_overrides[get_repository] = lambda: EmptyRepository()
+
+    TestClient(app, raise_server_exceptions=False).post(
+        "/lookup",
+        headers={"Authorization": "Bearer test-token"},
+        json={"person_uid": PERSON_UID, "view_type": "mensapass", "fields": ["display_name"]},
+    )
+
+    assert "person" not in sentry_sdk.get_isolation_scope()._tags
 
 
 def test_without_a_salt_no_tag_is_attached(sentry_events, configured_environment):

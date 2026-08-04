@@ -58,7 +58,13 @@ async def lookup(
     # nothing downstream should. What survives is a keyed pseudonym: enough to see
     # that one person failed repeatedly, not enough to learn who.
     tag = pseudonym(request.person_uid, get_observability_settings().pseudonym_salt)
-    if tag is not None:
+    # The client check is not a micro-optimisation. `set_tag` writes to the
+    # isolation scope, and it is Sentry's Starlette integration that forks a fresh
+    # one per request -- but that integration is only installed by `sentry_sdk.init`.
+    # In a deployment with a salt and no DSN, which is perfectly ordinary, every
+    # request would otherwise write into one ambient, never-reset, process-global
+    # scope that nothing ever reads or clears.
+    if tag is not None and sentry_sdk.get_client().is_active():
         sentry_sdk.set_tag("person", tag)
 
     try:
