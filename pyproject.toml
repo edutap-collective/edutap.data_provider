@@ -29,7 +29,11 @@ dev = [
     # package itself, so there is no required install ordering — unlike a
     # separate `pip install` step run before `-e ".[dev]"` in CI.
     "edutap.db_definitions @ git+https://github.com/edutap-collective/edutap.db_definitions@main",
-    "httpx>=0.27",
+    # Never imported by this package. `fastapi.testclient` needs an HTTP client, and
+    # starlette 1.3 takes `httpx2` in preference to `httpx`, warning whenever it has
+    # to fall back to the latter. Listing it here is what keeps that fallback — and
+    # its deprecation warning — out of the test run.
+    "httpx2>=2.9",
     "pdbp",
     "pytest>=8.2",
     "pytest-asyncio>=0.24",
