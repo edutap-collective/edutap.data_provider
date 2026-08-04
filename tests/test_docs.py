@@ -50,11 +50,18 @@ def test_every_rule_function_is_documented():
 
 
 def test_every_setting_is_documented():
+    """Both settings models, not only the required one.
+
+    `ObservabilitySettings` decides what leaves the process. An operator who
+    cannot find it in the reference cannot decide whether to enable it.
+    """
+    from edutap.data_provider.observability import ObservabilitySettings
     from edutap.data_provider.settings import Settings
 
     reference = (DOCS / "reference.md").read_text()
-    for field in Settings.model_fields:
-        assert f"EDUTAP_DATA_PROVIDER_{field.upper()}" in reference
+    for model in (Settings, ObservabilitySettings):
+        for field in model.model_fields:
+            assert f"EDUTAP_DATA_PROVIDER_{field.upper()}" in reference
 
 
 def test_every_field_kind_is_documented():

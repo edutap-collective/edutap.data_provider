@@ -22,6 +22,10 @@ services:
       EDUTAP_DATA_PROVIDER_DATABASE_URL: postgresql+asyncpg://data_provider:data_provider@db/data_provider
       EDUTAP_DATA_PROVIDER_CONFIG_PATH: /app/views.yaml
       EDUTAP_DATA_PROVIDER_API_TOKEN: ${EDUTAP_DATA_PROVIDER_API_TOKEN:-dev-token}
+      # Optional; unset in the test environment, so nothing is reported anywhere.
+      EDUTAP_DATA_PROVIDER_SENTRY_DSN: ${EDUTAP_DATA_PROVIDER_SENTRY_DSN:-}
+      EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT: ${EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT:-}
+      EDUTAP_DATA_PROVIDER_ENVIRONMENT: development
     volumes:
       - ./views.example.yaml:/app/views.yaml:ro
     ports: ["8000:8000"]

@@ -7,6 +7,12 @@ _ENVIRONMENT = (
     "EDUTAP_DATA_PROVIDER_CONFIG_PATH",
     "EDUTAP_DATA_PROVIDER_API_TOKEN",
     "EDUTAP_DATA_PROVIDER_ECHO_SQL",
+    # Without these four a developer with a DSN in their shell would have every
+    # test in this suite reporting to a real Bugsink, and the suite would pass.
+    "EDUTAP_DATA_PROVIDER_SENTRY_DSN",
+    "EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT",
+    "EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT",
+    "EDUTAP_DATA_PROVIDER_ENVIRONMENT",
 )
 
 
@@ -21,18 +27,21 @@ def clean_environment(monkeypatch):
     for name in _ENVIRONMENT:
         monkeypatch.delenv(name, raising=False)
 
+    from edutap.data_provider import observability
     from edutap.data_provider import settings as settings_module
     from edutap.data_provider.api import dependencies
 
     settings_module.get_settings.cache_clear()
     dependencies.get_provider_config.cache_clear()
     dependencies.get_repository.cache_clear()
+    observability.get_observability_settings.cache_clear()
 
     yield
 
     settings_module.get_settings.cache_clear()
     dependencies.get_provider_config.cache_clear()
     dependencies.get_repository.cache_clear()
+    observability.get_observability_settings.cache_clear()
 
 
 MINIMAL_CONFIG = """
