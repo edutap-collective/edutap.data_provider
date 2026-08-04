@@ -16,6 +16,16 @@ dependencies = [
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
     "pyyaml>=6",
+    # The ninth runtime dependency, which the design record requires a written reason
+    # for. A service that answers a deliberately opaque 500 -- opaque because the
+    # blanket handler must not leak stored data -- has no diagnosable failure without
+    # an error tracker. Making it an extra would mean the one configuration that
+    # makes failures visible is the one nobody installs.
+    "sentry-sdk[fastapi]>=2.66",
+    # The tenth runtime dependency; same reason as the ninth. The [fastapi] extra is
+    # not cosmetic: `logfire.instrument_fastapi()` raises at runtime without
+    # `opentelemetry-instrumentation-fastapi`, which only that extra pulls in.
+    "logfire[fastapi]>=4.39",
     "sqlalchemy>=2.0",
     "sqlmodel>=0.0.22",
     "uvicorn[standard]>=0.30",
@@ -58,8 +68,11 @@ allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: needs a PostgreSQL container"]
-addopts = "-m 'not integration'"
+markers = [
+    "integration: needs a PostgreSQL container",
+    "slow: exercises real elapsed time (subprocess timing), seconds not milliseconds",
+]
+addopts = "-m 'not integration and not slow'"
 asyncio_mode = "auto"
 
 [tool.ruff]

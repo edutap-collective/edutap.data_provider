@@ -56,3 +56,47 @@ def test_an_empty_api_token_is_refused(monkeypatch):
     # what is under test is that it fails and says why, not which class carries it.
     with pytest.raises(Exception, match="must not be empty"):
         Settings()
+
+
+def test_observability_is_off_when_nothing_is_configured():
+    """The default is a service that reports nowhere.
+
+    Every one of the other tests in this suite runs in this state, so if the
+    default were anything else they would all be emitting.
+    """
+    from edutap.data_provider.observability import ObservabilitySettings
+
+    settings = ObservabilitySettings()
+
+    assert settings.sentry_dsn is None
+    assert settings.otlp_endpoint is None
+    assert settings.pseudonym_salt is None
+    assert settings.environment == "production"
+
+
+def test_the_observability_settings_never_refuse_to_build(monkeypatch):
+    """No field is required, on purpose.
+
+    `create_app` reads these *before* it resolves `Settings`, so that a process
+    refusing to start is still reported. A required field here would make the
+    reporting of a broken configuration itself depend on a working configuration.
+    """
+    from edutap.data_provider.observability import ObservabilitySettings
+
+    for name in ("DATABASE_URL", "CONFIG_PATH", "API_TOKEN"):
+        monkeypatch.delenv(f"EDUTAP_DATA_PROVIDER_{name}", raising=False)
+
+    assert ObservabilitySettings() is not None
+
+
+def test_the_dsn_and_the_salt_are_secrets(monkeypatch):
+    """Neither may appear in a repr, for the reason `database_url` is a secret."""
+    from edutap.data_provider.observability import ObservabilitySettings
+
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_SENTRY_DSN", "https://public@bugsink.invalid/7")
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT", "a-real-salt")
+
+    rendered = repr(ObservabilitySettings())
+
+    assert "public@bugsink.invalid" not in rendered
+    assert "a-real-salt" not in rendered

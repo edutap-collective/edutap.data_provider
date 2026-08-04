@@ -175,3 +175,86 @@ It is emphatically **not** a statement that a person is entitled to a pass.
 Authorisation happens earlier, where the pass is requested; hanging it on the view
 row would be far too late, and would quietly turn a data-minimisation mechanism into
 an access-control one that nothing tests.
+
+## What leaves the process, and what does not
+
+The service exists so that a consumer sees only the fields it needs. An error
+tracker is a machine that copies the state around a failure somewhere else, so
+pointing one at this service is a decision about personal data, not a piece of
+operations plumbing.
+
+There are two such machines here, and the decision is the same for both: an error
+tracker reached by a Sentry DSN, and an OpenTelemetry collector reached by an OTLP
+endpoint. They are configured independently and neither implies the other, but
+nothing below is true of only one of them — in particular, the keyed pseudonym that
+stands in for a person travels on both, as a tag on an event and as an attribute on
+a span.
+
+The answer was measured rather than assumed, against the envelope a real request
+actually produces. Three things were true of the recommended configuration and are
+now false:
+
+* The bearer token appeared in every event, dozens of times over, inside the local
+  variables of the stack frames — while the `Authorization` header itself rendered
+  as `[Filtered]`. Local variables are no longer sent.
+* The `/lookup` request body was sent, and for this service the body *is* the
+  identifying datum. Request bodies are no longer sent.
+* The tracing integration recorded the validated request body on every *successful*
+  request, not only on failures. It now records the view and the number of fields.
+
+What reaches either backend is therefore: the exception and its stack, the view
+type, the name of a field, and — only if a salt is configured — a keyed pseudonym of
+the person. What never reaches them: the API token, the database password, the
+`person_uid`, the client's IP address, and any stored value. An event also carries
+the request URL and method, the surviving headers, the environment name and the
+list of installed modules; nothing there is personal, but the list above is what was
+decided, not an exhaustive inventory of an envelope.
+
+The pseudonym is an HMAC under a per-installation salt, truncated to 12 hex
+characters. An unkeyed hash would not do: a `person_uid` comes from a directory, so
+anyone able to read the error tracker could hash the directory and undo it. Rotating
+the salt renames every pseudonym, which is intended — a pseudonym should not follow a
+person for ever. No salt, or an empty one, means no pseudonym at all, rather than a
+digest under an empty key, which would be the reversible construction again.
+
+### The named limitation: the text of an exception message
+
+The one remaining channel is the text of an exception message. It reaches both
+backends: Bugsink is built to show it, and the OTLP instrumentation copies it into
+the span as `exception.message` and `exception.stacktrace`. Nothing scrubs it on
+either path, and that is a deliberate, accepted boundary rather than an oversight —
+so it is written down here, where the person deciding whether to point a collector
+at this service will read it.
+
+Accepting it imposes a discipline on both kinds of message that can travel.
+
+The messages this service writes name a field and a view and never a value, and the
+one message that did — a rule failing on a stored value — no longer has a route out
+of the process at all.
+
+Messages this service does *not* write are the harder half, and are the reason this
+limitation is named rather than assumed away. A dependency phrases its own errors,
+and one of them quoted a person: SQLAlchemy appends the bound parameters of a
+failing statement to every database error it raises, and the first bound parameter
+of the only statement this service issues is the `person_uid`. A dropped pool
+connection was enough. The engine is now built with `hide_parameters=True`, which
+closes that at the source — the statement still travels, the values bound into it do
+not — and the same flag keeps the parameters out of the engine's own SQL logging.
+
+A control on the channel itself was considered and rejected as disproportionate.
+logfire's scrubber, the only supported hook on the OTLP path, treats
+`exception.message`, `exception.type` and `exception.stacktrace` as safe keys: no
+callback and no pattern reaches them. Filtering them would mean taking over the
+export path — building the OTLP exporter and its batch processor by hand, inside a
+wrapping exporter — which replaces the one piece of this wiring that was measured
+most carefully, the bounded shutdown that keeps a SIGTERM from becoming a SIGKILL
+against an unreachable collector. It would also buy less than it appears to: the
+identical channel stays open on the Sentry side, where an exception's text is the
+entire point of the product, so the result would be a trace that hides what the
+error tracker shows. Closing the one measured leak at its source, and naming the
+boundary here, is the better trade.
+
+What this means operationally: **treat the OTLP collector as being as sensitive as
+the error tracker.** Both may receive an exception message written by a library,
+under a failure mode nobody has seen yet. Point them at systems the university
+operates, not at a third-party SaaS endpoint.

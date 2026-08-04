@@ -170,6 +170,10 @@ variables are ignored.
 | `EDUTAP_DATA_PROVIDER_CONFIG_PATH` | path | — required | the view configuration file, read and validated once at startup |
 | `EDUTAP_DATA_PROVIDER_API_TOKEN` | secret string | — required | the bearer token every API call must present. Must not be empty: an empty token authenticates nobody, so the process refuses to start |
 | `EDUTAP_DATA_PROVIDER_ECHO_SQL` | boolean | `false` | log every statement the engine emits; development only |
+| `EDUTAP_DATA_PROVIDER_SENTRY_DSN` | secret string | unset | Bugsink DSN. Unset means no error reporting at all. Held as a secret: a DSN is a credential |
+| `EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT` | string | unset | OTLP over HTTP endpoint for traces. Unset means no export. Nothing in this service emits metrics or logs over OTLP |
+| `EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT` | secret string | unset | HMAC key behind the `person` tag on events and spans. Unset — or empty — means no such tag. A directory is enumerable, so an unkeyed hash would be reversible by anyone reading the error tracker |
+| `EDUTAP_DATA_PROVIDER_ENVIRONMENT` | string | `production` | labels events and spans in both backends |
 
 ## Startup
 

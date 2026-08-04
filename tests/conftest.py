@@ -1,5 +1,8 @@
 """Shared fixtures."""
 
+import os
+from collections.abc import Mapping
+
 import pytest
 
 _ENVIRONMENT = (
@@ -7,7 +10,41 @@ _ENVIRONMENT = (
     "EDUTAP_DATA_PROVIDER_CONFIG_PATH",
     "EDUTAP_DATA_PROVIDER_API_TOKEN",
     "EDUTAP_DATA_PROVIDER_ECHO_SQL",
+    # Without these four a developer with a DSN in their shell would have every
+    # test in this suite reporting to a real Bugsink, and the suite would pass.
+    "EDUTAP_DATA_PROVIDER_SENTRY_DSN",
+    "EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT",
+    "EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT",
+    "EDUTAP_DATA_PROVIDER_ENVIRONMENT",
 )
+
+# Not this package's own namespace, but read directly by the OpenTelemetry SDK
+# that `logfire.configure()` sits on top of. A first attempt at this cleared only
+# `OTEL_EXPORTER_OTLP_ENDPOINT` by name -- review found `OTEL_EXPORTER_OTLP_
+# TRACES_ENDPOINT` builds an identical `BatchSpanProcessor(OTLPSpanExporter)` and
+# was left ambient (measured: 14.55s across three tests with only that sibling
+# variable set); `_METRICS_ENDPOINT` and `_LOGS_ENDPOINT` follow by the same
+# construction. The OpenTelemetry specification defines a large and growing
+# family of `OTEL_*` variables -- per-signal endpoint, protocol, header and
+# timeout variants among them -- and an SDK upgrade can add more without this
+# file ever being touched. Enumerating instances by name has now been the exact
+# shape of defect twice in this task (the request-argument mapper in the
+# previous round had the same bug: judging by one literal name instead of by
+# structure), so the rule here is the namespace prefix, not any one variable in
+# it.
+_OTEL_PREFIX = "OTEL_"
+
+
+def _keys_to_clear(environ: Mapping[str, str]) -> list[str]:
+    """Every variable name this suite must not let survive between tests.
+
+    A plain, directly callable function rather than inlined in the fixture below,
+    so the *rule* -- clear this package's own namespace by name, clear the whole
+    OpenTelemetry namespace by prefix -- can be tested on its own, cheaply and
+    deterministically, without needing to fake an ambient shell variable arriving
+    before a fixture's setup runs.
+    """
+    return [name for name in environ if name in _ENVIRONMENT or name.startswith(_OTEL_PREFIX)]
 
 
 @pytest.fixture(autouse=True)
@@ -18,21 +55,24 @@ def clean_environment(monkeypatch):
     clearing them a test would silently run against the previous test's environment,
     and the failure would look like a logic bug rather than a fixture bug.
     """
-    for name in _ENVIRONMENT:
+    for name in _keys_to_clear(os.environ):
         monkeypatch.delenv(name, raising=False)
 
+    from edutap.data_provider import observability
     from edutap.data_provider import settings as settings_module
     from edutap.data_provider.api import dependencies
 
     settings_module.get_settings.cache_clear()
     dependencies.get_provider_config.cache_clear()
     dependencies.get_repository.cache_clear()
+    observability.get_observability_settings.cache_clear()
 
     yield
 
     settings_module.get_settings.cache_clear()
     dependencies.get_provider_config.cache_clear()
     dependencies.get_repository.cache_clear()
+    observability.get_observability_settings.cache_clear()
 
 
 MINIMAL_CONFIG = """

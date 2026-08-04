@@ -45,6 +45,25 @@ jobs:
       - run: uv venv
       - run: uv pip install -e ".[dev]"
       - run: .venv/bin/python -m pytest -m integration -v
+  shutdown:
+    # The default run excludes these too (addopts), the same as integration
+    # above -- but unlike integration, nothing else in this file used to run
+    # them, which is exactly how a real regression got past review once already:
+    # an unreachable OTLP collector blocked process shutdown for ~20s (measured),
+    # long enough to turn an orchestrator's SIGTERM into a SIGKILL. The fix pins
+    # OTEL_EXPORTER_OTLP_TIMEOUT and friends so shutdown clears in ~6s instead,
+    # and this is the only thing that keeps that pin from silently rotting the
+    # next time someone edits install_observability. Do not delete this as a
+    # slow nuisance: it measured 6.6s the last time someone checked.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv pip install -e ".[dev]"
+      - run: .venv/bin/python -m pytest -m slow -v
   lint:
     runs-on: ubuntu-latest
     steps:
