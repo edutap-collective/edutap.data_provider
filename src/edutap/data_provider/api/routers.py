@@ -1,5 +1,6 @@
 """The two endpoints of the contract."""
 
+import logging
 from typing import Annotated, Any
 
 import sentry_sdk
@@ -17,6 +18,8 @@ from .dependencies import get_provider_config, get_repository
 from .errors import ProblemError
 
 router = APIRouter(dependencies=[Depends(require_token)])
+
+_LOGGER = logging.getLogger(__name__)
 
 # Annotated rather than `config: ProviderConfig = Depends(...)`: a call in an
 # argument default is B008, and this project's ruff configuration does not carry a
@@ -129,6 +132,31 @@ async def lookup(
             answer[key] = value.isoformat() if hasattr(value, "isoformat") else value
 
     if derivation_failure is not None:
+        # The only server-side record that this happened. A ProblemError is answered
+        # by Starlette's ExceptionMiddleware, several layers inside
+        # ServerErrorMiddleware, so -- unlike an exception nobody handled -- it is
+        # never re-raised and uvicorn logs nothing but the access line. Without this
+        # call, an operator running without a DSN would have no way to learn that a
+        # row is broken, let alone which field of which view: the comment above says
+        # the stored row is one query away in the database, and that presumes you
+        # know which row to go and look at.
+        #
+        # Safe to log, on the same terms as everything else in this module: the
+        # message names the field and the view and never a value, the person appears
+        # only as the keyed pseudonym computed above, and `max_breadcrumbs=0` (see
+        # `observability.sentry_options`) means a log record cannot become a Sentry
+        # breadcrumb in the first place.
+        #
+        # Measured, so that it is not a surprise later: where a DSN *is* configured,
+        # sentry-sdk's LoggingIntegration also turns this record into an event of
+        # its own (its default `event_level` is ERROR), so Bugsink sees two entries
+        # for one failure -- this message, and the ProblemError the request raises
+        # below. The duplicate is accepted rather than suppressed with a third
+        # mechanism: its content is exactly the two safe identifiers above, and the
+        # deployment this line exists for is the one with no DSN at all.
+        _LOGGER.error(
+            "%s Person: %s.", derivation_failure, tag if tag is not None else "no salt configured"
+        )
         # 500, not 4xx: the request was well-formed and no different request would
         # succeed. The defect is in data this service owns, so the blame belongs on
         # the server side. Raised here, after the loop and its try/except have both

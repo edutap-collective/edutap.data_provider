@@ -7,7 +7,15 @@ from fastapi.responses import JSONResponse
 # nothing beyond "it was us, and it was not your request": an arbitrary exception's
 # message can quote stored personal data — `RuleError` prints the offending value —
 # and its type name can be just as telling. The traceback belongs in the server log,
-# which is where it still goes; see `_handle_unexpected`.
+# which is where it goes for the exceptions this constant is about: an exception
+# nobody handled reaches `ServerErrorMiddleware`, which re-raises after answering,
+# so uvicorn logs it; see `_handle_unexpected`.
+#
+# That is true of *unhandled* exceptions only, and the distinction is easy to lose:
+# a `ProblemError` is answered by `ExceptionMiddleware`, several layers further in,
+# and is therefore never re-raised and never logged by the server. Anything raising
+# one that an operator would need to know about has to log that for itself — which
+# is what `routers.lookup` does for a failed derivation.
 UNEXPECTED_DETAIL = "The request could not be completed because of an internal error."
 
 
