@@ -57,6 +57,31 @@ def test_the_pseudonym_is_twelve_hex_characters(person_uid):
     assert all(character in "0123456789abcdef" for character in result)
 
 
+def test_the_salt_is_the_hmac_key_not_the_person_uid():
+    """Pins the argument order Task 2's review parked as unchecked.
+
+    `hmac.new(key, msg, digestmod)` is not commutative in general, so a reversed
+    call -- the person as the key, the salt as the message -- computes a different
+    digest and would otherwise pass every test above it: they only ever compare two
+    `pseudonym(...)` results against each other, never against an independently
+    computed value, so a swap inside the function would go unnoticed. This test
+    reproduces `pseudonym`'s digest by hand, with the order the docstring claims
+    ("Keyed rather than a plain digest"), and fails if the implementation swaps it.
+    """
+    import hashlib as _hashlib
+    import hmac as _hmac
+
+    person_uid = "u123456"
+
+    expected = _hmac.new(
+        SALT.get_secret_value().encode("utf-8"),
+        person_uid.encode("utf-8"),
+        _hashlib.sha256,
+    ).hexdigest()[:12]
+
+    assert pseudonym(person_uid, SALT) == expected
+
+
 @pytest.fixture
 def sentry_events():
     """Capture what Sentry would send, using the production options verbatim.
@@ -733,6 +758,52 @@ def test_a_rejected_request_does_not_echo_the_body_through_its_error():
 
     assert PERSON_UID not in json.dumps(result, default=str)
     assert result["errors"] == [{"type": "missing", "loc": ("body", "view_type")}]
+
+
+def test_an_event_from_lookup_carries_the_pseudonym_and_not_the_person(
+    sentry_events, configured_environment, monkeypatch
+):
+    """One person failing five times must be visible; who they are must not be."""
+    from edutap.data_provider.api.app import create_app
+    from edutap.data_provider.observability import ObservabilitySettings, pseudonym
+
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT", "a-salt")
+    from edutap.data_provider import observability
+
+    observability.get_observability_settings.cache_clear()
+
+    app = create_app()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    client.post(
+        "/lookup",
+        headers={"Authorization": "Bearer test-token"},
+        json={"person_uid": PERSON_UID, "view_type": "mensapass", "fields": ["display_name"]},
+    )
+
+    blob = json.dumps(sentry_events)
+    assert PERSON_UID not in blob
+    expected = pseudonym(
+        PERSON_UID, ObservabilitySettings(pseudonym_salt=SecretStr("a-salt")).pseudonym_salt
+    )
+    assert expected in blob
+
+
+def test_without_a_salt_no_tag_is_attached(sentry_events, configured_environment):
+    """No salt, no pseudonym -- not a tag computed from an empty key."""
+    from edutap.data_provider.api.app import create_app
+
+    app = create_app()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    client.post(
+        "/lookup",
+        headers={"Authorization": "Bearer test-token"},
+        json={"person_uid": PERSON_UID, "view_type": "mensapass", "fields": ["display_name"]},
+    )
+
+    for event in sentry_events:
+        assert "person" not in event.get("tags", {})
 
 
 def test_a_real_span_from_a_rejected_request_carries_no_person():

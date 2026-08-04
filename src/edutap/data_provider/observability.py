@@ -159,7 +159,11 @@ def scrub_request_attributes(request: object, attributes: dict) -> dict:
 
     - a `LookupRequest`-shaped value (`_is_lookup_shaped`), under any key, reduces
       to `{"view_type": ..., "field_count": ...}` -- which view was asked for and
-      how many fields, not who was asked about;
+      how many fields, not who was asked about -- plus `"person"`, a keyed
+      pseudonym of the same shape's `person_uid`, present only when a salt is
+      configured, so a trace carries the same label an event does (see
+      `routers.lookup`) rather than a second, differently-shaped way to identify
+      someone;
     - the bare scalar under the key `"view_type"` survives unchanged, because
       `/catalogue` receives it directly as a query parameter rather than inside a
       body, and it is the one specific value this module knows is safe -- allow-
@@ -187,10 +191,16 @@ def scrub_request_attributes(request: object, attributes: dict) -> dict:
         reduced_values: dict[str, object] = {}
         for key, value in values.items():
             if _is_lookup_shaped(value):
-                reduced_values[key] = {
+                reduced: dict[str, object] = {
                     "view_type": getattr(value, "view_type", None),
                     "field_count": len(getattr(value, "fields", None) or []),
                 }
+                person_uid = getattr(value, "person_uid", None)
+                if person_uid is not None:
+                    tag = pseudonym(person_uid, get_observability_settings().pseudonym_salt)
+                    if tag is not None:
+                        reduced["person"] = tag
+                reduced_values[key] = reduced
             elif key == "view_type" and isinstance(value, str):
                 reduced_values[key] = value
             # Anything else -- a dependency, an unrecognised parameter, a bare

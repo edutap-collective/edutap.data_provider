@@ -2,11 +2,13 @@
 
 from typing import Annotated, Any
 
+import sentry_sdk
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ..catalogue import CatalogueEntry, UnknownViewType, catalogue_for
 from ..config import ProviderConfig
+from ..observability import get_observability_settings, pseudonym
 from ..repository import Repository
 from ..rules import RuleError, evaluate, parse_rule
 from ..validation import datetime_fields
@@ -48,6 +50,14 @@ async def lookup(
     repository: RepositoryDependency,
 ) -> dict[str, Any]:
     """Return exactly the requested fields for one person."""
+    # The only place in the process that holds a person_uid. Sentry is configured
+    # with max_request_body_size="never", so nothing downstream can recover it -- and
+    # nothing downstream should. What survives is a keyed pseudonym: enough to see
+    # that one person failed repeatedly, not enough to learn who.
+    tag = pseudonym(request.person_uid, get_observability_settings().pseudonym_salt)
+    if tag is not None:
+        sentry_sdk.set_tag("person", tag)
+
     try:
         entries = {entry.key: entry for entry in catalogue_for(config, request.view_type)}
     except UnknownViewType as error:

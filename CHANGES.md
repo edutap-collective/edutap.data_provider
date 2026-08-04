@@ -8,3 +8,6 @@
   through an entry point. The service creates no table and writes no row.
 - Bearer authentication; the service's own errors as `application/problem+json`.
 - Docker test environment, and documentation following Diátaxis.
+- Optional error reporting to Bugsink and OTLP export of traces, metrics and logs,
+  both off unless configured. No credential, no `person_uid`, no client address and
+  no stored value leaves the process; a keyed pseudonym stands in for a person.

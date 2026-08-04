@@ -175,3 +175,36 @@ It is emphatically **not** a statement that a person is entitled to a pass.
 Authorisation happens earlier, where the pass is requested; hanging it on the view
 row would be far too late, and would quietly turn a data-minimisation mechanism into
 an access-control one that nothing tests.
+
+## What leaves the process, and what does not
+
+The service exists so that a consumer sees only the fields it needs. An error
+tracker is a machine that copies the state around a failure somewhere else, so
+pointing one at this service is a decision about personal data, not a piece of
+operations plumbing.
+
+The answer was measured rather than assumed, against the envelope a real request
+actually produces. Three things were true of the recommended configuration and are
+now false:
+
+* The bearer token appeared in every event, dozens of times over, inside the local
+  variables of the stack frames — while the `Authorization` header itself rendered
+  as `[Filtered]`. Local variables are no longer sent.
+* The `/lookup` request body was sent, and for this service the body *is* the
+  identifying datum. Request bodies are no longer sent.
+* The tracing integration recorded the validated request body on every *successful*
+  request, not only on failures. It now records the view and the number of fields.
+
+What reaches an error tracker is therefore: the exception and its stack, the view
+type, the name of a field, and — only if a salt is configured — a keyed pseudonym of
+the person. What never reaches it: the API token, the database password, the
+`person_uid`, the client's IP address, and any stored value.
+
+The one remaining channel is the text of an exception message, which is why the
+messages this service writes name a field and a view and never a value.
+
+The pseudonym is an HMAC under a per-installation salt, truncated to 12 hex
+characters. An unkeyed hash would not do: a `person_uid` comes from a directory, so
+anyone able to read the error tracker could hash the directory and undo it. Rotating
+the salt renames every pseudonym, which is intended — a pseudonym should not follow a
+person for ever.
