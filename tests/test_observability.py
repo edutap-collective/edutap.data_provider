@@ -361,44 +361,68 @@ def test_an_operators_shutdown_timeout_choices_are_not_overridden(monkeypatch):
 def test_shutdown_against_an_unreachable_collector_is_bounded():
     """The measured defect this round closes, timed for real.
 
-    Run as a subprocess against a genuinely unroutable address (`10.255.255.1` --
-    chosen because it black-holes the connection attempt rather than refusing it
-    outright; a refused connection returns instantly and would not reproduce a
-    stall at all) so the measurement exercises the real interpreter-exit path --
-    the `atexit` handler the OpenTelemetry SDK's `TracerProvider` registers by
-    default -- not a mock of it.
+    Chose a self-contained TCP listener over an external "black hole" address
+    (an unroutable RFC1918 address, or a reserved documentation range like
+    192.0.2.0/24) specifically because this test has to run on a CI runner whose
+    outbound network policy this suite does not control: a private address's
+    black-holing behaviour depends on the runner's own network layout, and even a
+    range that is never announced on the public internet depends on the runner
+    having ordinary internet egress at all, which is not guaranteed. Binding to
+    `127.0.0.1` and never calling `accept()` depends on nothing external: the
+    kernel completes the TCP handshake for a connection sitting in the listen
+    backlog, so the exporter's *connect* succeeds immediately and only the
+    *response* never arrives -- reliably reproducing a hang bounded by
+    `OTEL_EXPORTER_OTLP_TIMEOUT`'s read-timeout, on loopback, on any machine that
+    can open a socket to itself.
 
-    Before this round's fix: ~20.4s (measured, see the report). After: ~6.3-6.5s
-    (measured over two runs), matching the theoretical worst case of twice the
-    3-second `OTEL_EXPORTER_OTLP_TIMEOUT` this fix sets. The bound below is
-    comfortably above that observed range, to absorb process-startup and
-    scheduling noise on a loaded machine, and comfortably below both the old
-    ~20s behaviour and Docker's 10s default SIGTERM grace period.
+    Measured, both directions, with this exact reproduction: unfixed, ~10.44s
+    (matching the OpenTelemetry SDK's 10s default almost exactly -- a read
+    timeout raises `requests.exceptions.ReadTimeout`, which is not a
+    `ConnectionError`, so the exporter's internal single retry-on-`ConnectionError`
+    does not trigger here, unlike the roughly-doubled ~20s seen against a
+    connection that is refused or black-holed outright). Fixed, ~3.4s, matching
+    the 3-second `OTEL_EXPORTER_OTLP_TIMEOUT` this round sets, one attempt, no
+    retry. The bound below sits between the two, with margin on both sides for
+    scheduling noise on a loaded CI runner.
     """
+    import socket
     import subprocess
     import sys
     import time
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    listener.listen(1)
+    # Deliberately never `accept()`ed, never closed until the test ends: the
+    # subprocess below connects into the backlog and then waits forever for a
+    # response this process never sends.
 
     code = (
         "import sys; sys.path.insert(0, 'src')\n"
         "from edutap.data_provider.observability import ObservabilitySettings\n"
         "from edutap.data_provider.observability import install_observability\n"
-        "install_observability(ObservabilitySettings(otlp_endpoint='http://10.255.255.1:4318'))\n"
+        f"install_observability(ObservabilitySettings(otlp_endpoint='http://127.0.0.1:{port}'))\n"
         "import logfire\n"
         "with logfire.span('probe'):\n"
         "    pass\n"
     )
 
-    start = time.monotonic()
-    # `sys.executable` and `code` are both hardcoded above, not untrusted input --
-    # this runs the same interpreter running the test suite, on a literal string.
-    subprocess.run(  # noqa: S603  fixed interpreter, fixed literal script, no untrusted input
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
-    )
-    elapsed = time.monotonic() - start
+    try:
+        start = time.monotonic()
+        # `sys.executable` and `code` are both hardcoded above, not untrusted
+        # input -- this runs the same interpreter running the test suite, on a
+        # literal string.
+        subprocess.run(  # noqa: S603  fixed interpreter, fixed literal script, no untrusted input
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
+        )
+        elapsed = time.monotonic() - start
+    finally:
+        listener.close()
 
-    assert elapsed < 9, (
-        f"shutdown took {elapsed:.1f}s -- must stay clear of a 10s SIGTERM grace period"
+    assert elapsed < 7, (
+        f"shutdown took {elapsed:.1f}s -- must stay well clear of the "
+        "unfixed ~10.4s and of a 10s SIGTERM grace period"
     )
 
 
