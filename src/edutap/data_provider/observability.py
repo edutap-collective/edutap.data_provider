@@ -11,8 +11,10 @@ wire rather than from a backend's recommendation. The measurements are recorded 
 import hashlib
 import hmac
 import logging
+import os
 from functools import lru_cache
 
+import logfire
 import sentry_sdk
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -125,6 +127,55 @@ def sentry_options(settings: ObservabilitySettings) -> dict[str, object]:
     }
 
 
+def scrub_request_attributes(request: object, attributes: dict) -> dict:
+    """Replace a recorded request body, and its validation errors, with their shape.
+
+    logfire's FastAPI instrumentation records two things as span attributes on every
+    request: the validated endpoint arguments (`values`) and, on a rejected request,
+    the raw Pydantic errors that rejected it (`errors`). For `/lookup` both can carry
+    a `person_uid`, so neither raw mapping can be exported.
+
+    The `errors` half exists because of a Pydantic detail, not a FastAPI one:
+    measured directly, a "missing field" error's `input` is not the missing field's
+    value -- it is the *whole enclosing dict*, because the error is reported against
+    the model. A `/lookup` request missing `fields` but carrying a `person_uid`
+    therefore has that `person_uid` sitting in `errors[0]["input"]` on a plain 422,
+    with no exception anywhere in the picture.
+
+    What survives is what makes a trace worth having -- which view was asked for and
+    how many fields, or which field failed validation and how -- and not who was
+    asked about. A body this function does not recognise is reduced to nothing
+    rather than passed through: a later endpoint must not become an export path
+    because no rule here happened to match it.
+    """
+    values = attributes.get("values")
+    result = attributes
+    if isinstance(values, dict) and "body" in values:
+        body = values["body"]
+        reduced = {
+            "view_type": getattr(body, "view_type", None),
+            "field_count": len(getattr(body, "fields", None) or []),
+        }
+        result = {**result, "values": {**values, "body": reduced}}
+
+    errors = result.get("errors")
+    if isinstance(errors, list):
+        # `input` is the leak: on a Pydantic "missing" error it is the whole request
+        # body, and on any other error type it is the value that failed. `type` and
+        # `loc` are what is left -- which field, what kind of problem -- and they are
+        # drawn from a small fixed vocabulary of Pydantic's own error type strings,
+        # not from anything a caller supplied.
+        result = {
+            **result,
+            "errors": [
+                {"type": error.get("type"), "loc": error.get("loc")}
+                for error in errors
+                if isinstance(error, dict)
+            ],
+        }
+    return result
+
+
 def install_observability(settings: ObservabilitySettings) -> None:
     """Configure error reporting and tracing, or configure nothing at all.
 
@@ -159,3 +210,21 @@ def install_observability(settings: ObservabilitySettings) -> None:
                 "EDUTAP_DATA_PROVIDER_SENTRY_DSN is not a valid DSN; "
                 "error reporting is disabled for this process."
             )
+
+    if settings.otlp_endpoint:
+        # The exporter takes its endpoint from the OpenTelemetry environment, not
+        # from an argument. Writing it here keeps the package's own configuration in
+        # pydantic-settings, where every other value lives, instead of asking an
+        # operator to set one variable in our namespace and one in OpenTelemetry's.
+        # `setdefault`, not assignment: an operator who has set the OTel variable
+        # deliberately -- alongside the protocol, header and timeout variables the
+        # SDK also reads -- keeps their value.
+        os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", settings.otlp_endpoint)
+        logfire.configure(
+            # No Pydantic cloud account and no token: this is logfire used as a
+            # plain OTLP SDK against a self-hosted collector.
+            send_to_logfire=False,
+            service_name="edutap.data_provider",
+            environment=settings.environment,
+            console=False,
+        )

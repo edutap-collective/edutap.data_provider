@@ -1,10 +1,15 @@
 """Application factory."""
 
+import logfire
 from fastapi import APIRouter, FastAPI
 from pydantic import ValidationError
 
 from ..config import ConfigError
-from ..observability import get_observability_settings, install_observability
+from ..observability import (
+    get_observability_settings,
+    install_observability,
+    scrub_request_attributes,
+)
 from ..settings import Settings, get_settings
 from .dependencies import get_provider_config
 from .errors import install_error_handlers
@@ -106,4 +111,9 @@ def create_app() -> FastAPI:
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(router)
+    # Only when tracing is configured: `instrument_fastapi` patches the application
+    # whether or not an exporter exists, and an unexported span is still work done on
+    # every request.
+    if get_observability_settings().otlp_endpoint:
+        logfire.instrument_fastapi(app, request_attributes_mapper=scrub_request_attributes)
     return app
