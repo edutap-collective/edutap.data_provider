@@ -255,6 +255,42 @@ def install_observability(settings: ObservabilitySettings) -> None:
         # deliberately -- alongside the protocol, header and timeout variables the
         # SDK also reads -- keeps their value.
         os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", settings.otlp_endpoint)
+        # Without a bound, an unreachable collector blocks shutdown -- interpreter
+        # exit, and every SIGTERM -- for roughly the OpenTelemetry SDK's export
+        # timeout *twice over*: once for whatever export the background batch
+        # processor already had in flight, once more for the final
+        # flush-everything-remaining call it issues as it shuts down. Measured
+        # directly against this service, with one span emitted and a genuinely
+        # unroutable collector address: 20.4s to exit, against the SDK's 10s
+        # per-attempt default. That collides with an orchestrator's termination
+        # grace period -- Docker's default is 10s -- and turns a graceful shutdown
+        # into a SIGKILL, discarding whatever the process was doing mid-request.
+        #
+        # `OTEL_EXPORTER_OTLP_TIMEOUT` (seconds) is the lever actually wired to
+        # this: confirmed by reading the installed exporter's source
+        # (`opentelemetry-exporter-otlp-proto-http`), it bounds each export
+        # attempt via `requests.Session.post(..., timeout=...)`. 3 seconds keeps
+        # worst-case shutdown blocking near 6 seconds -- comfortably under
+        # Docker's 10s grace period -- while staying generous next to a healthy
+        # collector's response time, which is normally milliseconds; a slow but
+        # working collector only loses a span if it cannot answer within 3s; a
+        # value in the low single digits was chosen over something closer to 1s
+        # specifically to leave that margin.
+        os.environ.setdefault("OTEL_EXPORTER_OTLP_TIMEOUT", "3")
+        # `OTEL_BSP_SCHEDULE_DELAY` (milliseconds): the interval between batch
+        # flushes, shortened from the SDK's 5000ms default so a healthy collector
+        # sees spans sooner and so less is ever queued -- and therefore blocking a
+        # shutdown -- mid-flight when shutdown lands.
+        os.environ.setdefault("OTEL_BSP_SCHEDULE_DELAY", "1000")
+        # `OTEL_BSP_EXPORT_TIMEOUT` (milliseconds): read but, measured directly
+        # against the installed opentelemetry-sdk (1.44), *not currently applied*
+        # to the join() call shutdown makes on the batch processor's worker thread
+        # -- the SDK's own source says so ("Not used. No way currently to pass
+        # timeout to export.", tracked upstream as
+        # open-telemetry/opentelemetry-python#4555). Set anyway, matched to the
+        # value above, so a future SDK release that does wire it up inherits a
+        # value already chosen for this service rather than the 30s default.
+        os.environ.setdefault("OTEL_BSP_EXPORT_TIMEOUT", "3000")
         logfire.configure(
             # No Pydantic cloud account and no token: this is logfire used as a
             # plain OTLP SDK against a self-hosted collector.

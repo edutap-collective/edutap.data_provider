@@ -164,6 +164,45 @@ def test_traces_are_off_because_bugsink_discards_them():
     assert sentry_options(ObservabilitySettings())["traces_sample_rate"] == 0
 
 
+def test_the_environment_cleared_between_tests_covers_the_whole_otel_namespace():
+    """`conftest.py`'s autouse fixture must clear every `OTEL_*` variable, not one
+    name it happens to know about.
+
+    A first version cleared only `OTEL_EXPORTER_OTLP_ENDPOINT`. Review found
+    `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` builds an identical network exporter and
+    was left ambient (measured: 14.55s across three tests with only that sibling
+    variable set) -- `_METRICS_ENDPOINT` and `_LOGS_ENDPOINT` follow by the same
+    construction, and the OpenTelemetry specification defines more variables than
+    any one list here could enumerate and keep current. Testing the *rule*
+    (prefix, not name) directly, rather than the fixture's effect on this one
+    process's environment at this one moment -- which by the time this test body
+    runs has already had the fixture's own setup applied, and so could never by
+    itself prove what an *ambient*, pre-existing shell variable would see.
+    """
+    import conftest
+
+    environ = {
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "x",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "x",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "x",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "x",
+        "OTEL_A_FUTURE_SDK_VERSION_ADDS_THIS_ONE": "x",
+        "EDUTAP_DATA_PROVIDER_SENTRY_DSN": "x",
+        "UNRELATED_VARIABLE_MUST_SURVIVE": "x",
+    }
+
+    cleared = conftest._keys_to_clear(environ)
+
+    assert set(cleared) == {
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_A_FUTURE_SDK_VERSION_ADDS_THIS_ONE",
+        "EDUTAP_DATA_PROVIDER_SENTRY_DSN",
+    }
+
+
 def test_nothing_is_installed_without_a_dsn():
     """Every other test in the suite runs in this state."""
     from edutap.data_provider.observability import install_observability
@@ -277,6 +316,90 @@ def test_the_otlp_endpoint_configures_logfire_against_the_opentelemetry_environm
             "console": False,
         }
     ]
+
+
+def test_the_otlp_block_bounds_the_export_and_batch_timeouts(monkeypatch):
+    """Without a bound, an unreachable collector blocks shutdown -- interpreter
+    exit, and every SIGTERM -- for roughly the OpenTelemetry SDK's export timeout
+    *twice over* (once for whatever export was already in flight, once for the
+    final flush-everything-remaining call the batch processor issues on
+    shutdown). Measured directly: 20.4s to exit a process that had emitted one
+    span, against the SDK's 10s-per-attempt default -- long enough to collide
+    with an orchestrator's termination grace period (Docker's default is 10s)
+    and turn a graceful shutdown into a SIGKILL. See
+    `test_shutdown_against_an_unreachable_collector_is_bounded` for the real,
+    timed reproduction; this test only pins the three values that fix it.
+    """
+    calls: list[dict] = []
+    monkeypatch.setattr(logfire, "configure", lambda **kwargs: calls.append(kwargs))
+    from edutap.data_provider.observability import install_observability
+
+    install_observability(ObservabilitySettings(otlp_endpoint="http://collector.example:4318"))
+
+    assert os.environ["OTEL_EXPORTER_OTLP_TIMEOUT"] == "3"
+    assert os.environ["OTEL_BSP_SCHEDULE_DELAY"] == "1000"
+    assert os.environ["OTEL_BSP_EXPORT_TIMEOUT"] == "3000"
+
+
+def test_an_operators_shutdown_timeout_choices_are_not_overridden(monkeypatch):
+    """The mirror of `test_an_operators_otel_endpoint_choice_is_not_overridden`,
+    for the three timeout/interval variables the fix above adds."""
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "7")
+    monkeypatch.setenv("OTEL_BSP_SCHEDULE_DELAY", "2500")
+    monkeypatch.setenv("OTEL_BSP_EXPORT_TIMEOUT", "9000")
+    monkeypatch.setattr(logfire, "configure", lambda **kwargs: None)
+    from edutap.data_provider.observability import install_observability
+
+    install_observability(ObservabilitySettings(otlp_endpoint="http://collector.example:4318"))
+
+    assert os.environ["OTEL_EXPORTER_OTLP_TIMEOUT"] == "7"
+    assert os.environ["OTEL_BSP_SCHEDULE_DELAY"] == "2500"
+    assert os.environ["OTEL_BSP_EXPORT_TIMEOUT"] == "9000"
+
+
+@pytest.mark.slow
+def test_shutdown_against_an_unreachable_collector_is_bounded():
+    """The measured defect this round closes, timed for real.
+
+    Run as a subprocess against a genuinely unroutable address (`10.255.255.1` --
+    chosen because it black-holes the connection attempt rather than refusing it
+    outright; a refused connection returns instantly and would not reproduce a
+    stall at all) so the measurement exercises the real interpreter-exit path --
+    the `atexit` handler the OpenTelemetry SDK's `TracerProvider` registers by
+    default -- not a mock of it.
+
+    Before this round's fix: ~20.4s (measured, see the report). After: ~6.3-6.5s
+    (measured over two runs), matching the theoretical worst case of twice the
+    3-second `OTEL_EXPORTER_OTLP_TIMEOUT` this fix sets. The bound below is
+    comfortably above that observed range, to absorb process-startup and
+    scheduling noise on a loaded machine, and comfortably below both the old
+    ~20s behaviour and Docker's 10s default SIGTERM grace period.
+    """
+    import subprocess
+    import sys
+    import time
+
+    code = (
+        "import sys; sys.path.insert(0, 'src')\n"
+        "from edutap.data_provider.observability import ObservabilitySettings\n"
+        "from edutap.data_provider.observability import install_observability\n"
+        "install_observability(ObservabilitySettings(otlp_endpoint='http://10.255.255.1:4318'))\n"
+        "import logfire\n"
+        "with logfire.span('probe'):\n"
+        "    pass\n"
+    )
+
+    start = time.monotonic()
+    # `sys.executable` and `code` are both hardcoded above, not untrusted input --
+    # this runs the same interpreter running the test suite, on a literal string.
+    subprocess.run(  # noqa: S603  fixed interpreter, fixed literal script, no untrusted input
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
+    )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 9, (
+        f"shutdown took {elapsed:.1f}s -- must stay clear of a 10s SIGTERM grace period"
+    )
 
 
 def test_an_operators_otel_endpoint_choice_is_not_overridden(monkeypatch):

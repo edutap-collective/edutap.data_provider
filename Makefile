@@ -5,7 +5,7 @@ PYTHON := .venv/bin/python
 VENV   := .venv
 
 .DEFAULT_GOAL := help
-.PHONY: help venv lint reformat test-local test-integration run
+.PHONY: help venv lint reformat test-local test-integration test-slow run
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -29,6 +29,9 @@ test-local: venv ## Unit tests, no database needed
 
 test-integration: venv ## Integration tests against a PostgreSQL container
 	$(PYTHON) -m pytest -m integration -v
+
+test-slow: venv ## Tests that measure real elapsed time (seconds, not milliseconds)
+	$(PYTHON) -m pytest -m slow -v
 
 run: venv ## Start the service against the compose environment
 	$(PYTHON) -m uvicorn edutap.data_provider.api.app:create_app --factory --reload
