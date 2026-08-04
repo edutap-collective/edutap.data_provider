@@ -115,6 +115,139 @@ def sentry_events():
     sentry_sdk.get_global_scope().set_client(None)
 
 
+@pytest.fixture
+def span_exporter():
+    """Send this process's spans to an in-memory exporter, and tear the SDK down after.
+
+    `logfire.configure` is process-global in the same way `sentry_sdk.init` is: it
+    installs a `TracerProvider` with a live batch processor and leaves it there. The
+    `sentry_events` fixture above has always cleaned up after itself; the tests that
+    configure logfire used to do it inline and clean up after nothing, so every one
+    of them left a provider behind for the rest of the session. `logfire.shutdown`
+    flushes and shuts the provider down, which for an in-memory exporter is
+    immediate.
+    """
+    exporter = InMemorySpanExporter()
+    logfire.configure(
+        send_to_logfire=False,
+        console=False,
+        additional_span_processors=[SimpleSpanProcessor(exporter)],
+    )
+    yield exporter
+    logfire.shutdown()
+
+
+@pytest.fixture
+def instrumented_by_create_app(span_exporter, monkeypatch):
+    """Let `create_app` do the instrumenting, and capture what it exports.
+
+    Every span test in this file used to call `logfire.instrument_fastapi` by hand
+    after `create_app()` returned, which is why deleting either
+    `install_observability(...)` or `request_attributes_mapper=...` from
+    `api/app.py` left the whole suite green: the tests supplied the very wiring they
+    were meant to be checking. Here the endpoint setting is what makes `create_app`
+    instrument the application at all, and nothing else instruments it.
+
+    `logfire.configure` is neutralised *after* `span_exporter` has configured the
+    real one: `install_observability` would otherwise reconfigure logfire and
+    replace the provider this exporter is attached to (and, worse, attach a real
+    OTLP exporter aimed at the endpoint below).
+    """
+    from edutap.data_provider import observability
+
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT", "http://collector.invalid:4318")
+    monkeypatch.setattr(logfire, "configure", lambda **kwargs: None)
+    observability.get_observability_settings.cache_clear()
+    return span_exporter
+
+
+def _database_error(person_uid: str, view_type: str):
+    """Return the error a broken database connection really produces for `/lookup`.
+
+    Not a hand-written stand-in: the statement is the one `Repository.person_view`
+    compiles, the parameters are the ones it binds, and the wrapping is
+    `DBAPIError.instance` -- the exact call `sqlalchemy.engine.Connection.
+    _handle_dbapi_exception` makes for every failure that reaches a statement. The
+    one value taken from the application rather than invented here is
+    `hide_parameters`, read off the engine `get_repository` builds, because that
+    flag is the whole subject of the test: SQLAlchemy renders
+    `[parameters: ('u123456', 'mensapass')]` into `StatementError.__str__` unless
+    the engine was built with it.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.exc import DBAPIError
+
+    from edutap.data_provider.api.dependencies import get_repository
+    from edutap.data_provider.models.db import PersonView
+
+    engine = get_repository()._session_factory.kw["bind"].sync_engine
+    statement = select(PersonView.data).where(
+        PersonView.person_uid == person_uid,
+        PersonView.view_type == view_type,
+    )
+    compiled = statement.compile(dialect=engine.dialect)
+    return DBAPIError.instance(
+        str(compiled),
+        tuple(compiled.params.values()),
+        # What asyncpg raises when the pool hands out a connection the server has
+        # since closed -- one of three ordinary production causes, next to a
+        # statement timeout and a post-migration table mismatch.
+        OSError("connection was closed in the middle of operation"),
+        Exception,
+        hide_parameters=engine.hide_parameters,
+    )
+
+
+def test_a_database_error_does_not_carry_the_person_to_either_backend(
+    sentry_events, instrumented_by_create_app, configured_environment
+):
+    """The whole-branch review's Critical, reproduced and then pinned.
+
+    Every audit before this one scoped "the exception message" to the messages *this
+    package* writes; a dependency's message was never in scope. SQLAlchemy's is:
+    `StatementError.__str__` appends the bound parameters of the failing statement,
+    and for `/lookup` the first bound parameter is the person. The error needs no
+    exotic trigger -- a dropped pool connection, a statement timeout or a
+    post-migration table mismatch all reach it -- and it travels to *both* backends,
+    into the Sentry event and into the exported span's `exception.message`.
+
+    Driven through `create_app()`, with `create_app` doing its own instrumenting, so
+    that neither half can pass because the test wired it up more carefully than the
+    application does.
+    """
+    from edutap.data_provider.api.app import create_app
+    from edutap.data_provider.api.dependencies import get_repository
+
+    error = _database_error(PERSON_UID, "mensapass")
+
+    class BrokenRepository:
+        async def person_view(self, person_uid: str, view_type: str) -> dict:
+            raise error
+
+    app = create_app()
+    app.dependency_overrides[get_repository] = lambda: BrokenRepository()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/lookup",
+        headers={"Authorization": "Bearer test-token"},
+        json={"person_uid": PERSON_UID, "view_type": "mensapass", "fields": ["display_name"]},
+    )
+
+    assert response.status_code == 500
+
+    assert sentry_events, "no event captured -- the probe proves nothing"
+    event_blob = json.dumps(sentry_events)
+    assert "connection was closed" in event_blob, "the error itself must still arrive"
+    assert PERSON_UID not in event_blob
+
+    spans = [json.loads(span.to_json()) for span in instrumented_by_create_app.get_finished_spans()]
+    assert spans, "no span recorded -- the probe proves nothing"
+    span_blob = json.dumps(spans)
+    assert "connection was closed" in span_blob, "the error itself must still arrive"
+    assert PERSON_UID not in span_blob
+
+
 def _probe_app() -> FastAPI:
     """An application shaped like the real one where it matters: a body carrying a
     person, and a handler that fails after the body has been read."""
