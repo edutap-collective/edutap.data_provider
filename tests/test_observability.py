@@ -248,6 +248,74 @@ def test_a_database_error_does_not_carry_the_person_to_either_backend(
     assert PERSON_UID not in span_blob
 
 
+def test_create_app_installs_observability_itself(configured_environment, monkeypatch):
+    """`create_app` must configure the backends; the tests must not do it for it.
+
+    Review found that deleting `install_observability(get_observability_settings())`
+    from `api/app.py` left all 191 tests green: every test that needed a configured
+    backend configured it itself, in a fixture or inline, so the application's own
+    call was covered by nothing. A deployment with a DSN in its environment would
+    have reported nothing at all, and the suite would have said so too.
+
+    Asserted through behaviour rather than through a recorded call: with a DSN in
+    the environment, a built application is one whose Sentry client is active.
+    """
+    from edutap.data_provider import observability
+    from edutap.data_provider.api.app import create_app
+
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_SENTRY_DSN", "https://public@example.invalid/1")
+    observability.get_observability_settings.cache_clear()
+
+    try:
+        create_app()
+
+        assert sentry_sdk.get_client().is_active(), "create_app did not install observability"
+    finally:
+        # The same teardown `sentry_events` documents: `sentry_sdk.init` is
+        # process-global, and a client left behind would make the next test in the
+        # session report into nothing anyone reads.
+        sentry_sdk.get_global_scope().set_client(None)
+
+
+def test_create_app_instruments_the_application_with_the_scrubbing_mapper(
+    instrumented_by_create_app, configured_environment
+):
+    """The mapper must be wired in by `create_app`, not by whoever is testing it.
+
+    The counterpart to the test above, for the OTLP half and the same defect class:
+    deleting `request_attributes_mapper=scrub_request_attributes` from `api/app.py`
+    also left all 191 tests green, because every real-app span test called
+    `logfire.instrument_fastapi` by hand afterwards and passed the mapper itself.
+    Nothing here does: the application instruments itself, and the exported span is
+    read as an operator's collector would receive it.
+    """
+    from edutap.data_provider.api.app import create_app
+    from edutap.data_provider.api.dependencies import get_repository
+
+    class EmptyRepository:
+        async def person_view(self, person_uid: str, view_type: str) -> None:
+            return None
+
+    app = create_app()
+    app.dependency_overrides[get_repository] = lambda: EmptyRepository()
+
+    TestClient(app, raise_server_exceptions=False).post(
+        "/lookup",
+        headers={"Authorization": "Bearer test-token"},
+        json={"person_uid": PERSON_UID, "view_type": "mensapass", "fields": ["display_name"]},
+    )
+
+    spans = instrumented_by_create_app.get_finished_spans()
+    assert spans, "create_app did not instrument the application"
+    lookup_spans = [span for span in spans if "fastapi.arguments.values" in span.attributes]
+    assert lookup_spans, "no span carried the FastAPI arguments attribute"
+
+    values = json.loads(lookup_spans[0].attributes["fastapi.arguments.values"])
+
+    assert values == {"request": {"view_type": "mensapass", "field_count": 1}}
+    assert PERSON_UID not in json.dumps([json.loads(span.to_json()) for span in spans])
+
+
 def _probe_app() -> FastAPI:
     """An application shaped like the real one where it matters: a body carrying a
     person, and a handler that fails after the body has been read."""
