@@ -31,8 +31,15 @@ def pseudonym(person_uid: str, salt: SecretStr | None) -> str | None:
     Truncated to 12 hex characters, 48 bits: wide enough that two people in one
     installation colliding is not a practical concern, short enough that the result
     reads as a label rather than as an identifier worth storing.
+
+    An *empty* salt counts as no salt, for the same reason an empty DSN counts as no
+    DSN in `install_observability`: `compose.yml` writes `${VAR:-}`, which sets a
+    variable to the empty string rather than leaving it unset. An HMAC under an
+    empty key is a well-defined, entirely unkeyed digest -- precisely the reversible
+    hash-the-directory construction the key exists to prevent, and indistinguishable
+    from a real pseudonym by eye.
     """
-    if salt is None:
+    if salt is None or not salt.get_secret_value():
         return None
     digest = hmac.new(
         salt.get_secret_value().encode("utf-8"),

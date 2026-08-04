@@ -23,8 +23,12 @@ services:
       EDUTAP_DATA_PROVIDER_CONFIG_PATH: /app/views.yaml
       EDUTAP_DATA_PROVIDER_API_TOKEN: ${EDUTAP_DATA_PROVIDER_API_TOKEN:-dev-token}
       # Optional; unset in the test environment, so nothing is reported anywhere.
+      # `${VAR:-}` passes an empty string rather than leaving the variable unset,
+      # which is why an empty DSN and an empty salt both have to count as "not
+      # configured" in the code that reads them.
       EDUTAP_DATA_PROVIDER_SENTRY_DSN: ${EDUTAP_DATA_PROVIDER_SENTRY_DSN:-}
       EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT: ${EDUTAP_DATA_PROVIDER_OTLP_ENDPOINT:-}
+      EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT: ${EDUTAP_DATA_PROVIDER_PSEUDONYM_SALT:-}
       EDUTAP_DATA_PROVIDER_ENVIRONMENT: development
     volumes:
       - ./views.example.yaml:/app/views.yaml:ro

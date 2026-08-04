@@ -40,6 +40,19 @@ def test_without_a_salt_there_is_no_pseudonym():
     assert pseudonym("u123456", None) is None
 
 
+def test_an_empty_salt_does_not_count_as_configured():
+    """The mirror of `test_an_empty_dsn_does_not_count_as_configured`, for the salt.
+
+    `compose.yml` writes `${VAR:-}`, which sets a variable to the empty string
+    rather than leaving it unset, so an operator who has not chosen a salt hands
+    this function `SecretStr("")` rather than `None`. An HMAC under an empty key is
+    a well-defined, entirely unkeyed digest of the person: exactly the reversible
+    hash-the-directory attack the salt exists to prevent, wearing the same twelve
+    characters as a real pseudonym so that nothing looks wrong.
+    """
+    assert pseudonym("u123456", SecretStr("")) is None
+
+
 def test_the_pseudonym_never_contains_the_person_uid():
     person_uid = "u123456"
 
