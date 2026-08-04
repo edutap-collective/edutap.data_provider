@@ -916,7 +916,7 @@ def test_an_unknown_body_shape_is_reduced_rather_than_trusted():
     assert "must-not-appear" not in json.dumps(result, default=str)
 
 
-def test_a_real_span_carries_no_person():
+def test_a_real_span_carries_no_person(span_exporter):
     """End to end, against a real exporter.
 
     Not redundant with the unit test above: logfire swallows an exception raised
@@ -929,13 +929,6 @@ def test_a_real_span_carries_no_person():
     to be what the first version of this mapper looked for.
     """
     from edutap.data_provider.observability import scrub_request_attributes
-
-    exporter = InMemorySpanExporter()
-    logfire.configure(
-        send_to_logfire=False,
-        console=False,
-        additional_span_processors=[SimpleSpanProcessor(exporter)],
-    )
 
     app = FastAPI()
 
@@ -955,7 +948,7 @@ def test_a_real_span_carries_no_person():
         json={"person_uid": PERSON_UID, "view_type": "mensapass", "fields": ["display_name"]},
     )
 
-    spans = [json.loads(span.to_json()) for span in exporter.get_finished_spans()]
+    spans = [json.loads(span.to_json()) for span in span_exporter.get_finished_spans()]
     assert spans, "no span recorded -- the mapper may have raised and been swallowed"
     blob = json.dumps(spans)
     assert PERSON_UID not in blob
@@ -963,7 +956,7 @@ def test_a_real_span_carries_no_person():
 
 
 def test_a_real_span_from_the_real_app_carries_no_person_and_no_dependencies(
-    configured_environment,
+    span_exporter, configured_environment
 ):
     """The verification bar review found missing: the mapper must be proven against
     the actual application, not a probe conveniently shaped like the brief's
@@ -980,13 +973,6 @@ def test_a_real_span_from_the_real_app_carries_no_person_and_no_dependencies(
     from edutap.data_provider.api.app import create_app
     from edutap.data_provider.observability import scrub_request_attributes
 
-    exporter = InMemorySpanExporter()
-    logfire.configure(
-        send_to_logfire=False,
-        console=False,
-        additional_span_processors=[SimpleSpanProcessor(exporter)],
-    )
-
     app = create_app()
     logfire.instrument_fastapi(app, request_attributes_mapper=scrub_request_attributes)
 
@@ -1000,7 +986,7 @@ def test_a_real_span_from_the_real_app_carries_no_person_and_no_dependencies(
         json={"person_uid": PERSON_UID, "view_type": "mensapass", "fields": ["display_name"]},
     )
 
-    spans = exporter.get_finished_spans()
+    spans = span_exporter.get_finished_spans()
     assert spans, "no span recorded -- the mapper may have raised and been swallowed"
     lookup_spans = [span for span in spans if "fastapi.arguments.values" in span.attributes]
     assert lookup_spans, "no span carried the FastAPI arguments attribute"
@@ -1013,7 +999,7 @@ def test_a_real_span_from_the_real_app_carries_no_person_and_no_dependencies(
 
 
 def test_a_real_span_carries_the_same_pseudonym_as_the_matching_event(
-    sentry_events, configured_environment, monkeypatch
+    sentry_events, span_exporter, configured_environment, monkeypatch
 ):
     """Round 1 finding: the positive trace path Step 4 adds had no test at all --
     deleting the whole `person_uid`/`pseudonym` block from `scrub_request_attributes`
@@ -1060,13 +1046,6 @@ def test_a_real_span_carries_the_same_pseudonym_as_the_matching_event(
 
     observability.get_observability_settings.cache_clear()
 
-    exporter = InMemorySpanExporter()
-    logfire.configure(
-        send_to_logfire=False,
-        console=False,
-        additional_span_processors=[SimpleSpanProcessor(exporter)],
-    )
-
     app = create_app()
     logfire.instrument_fastapi(app, request_attributes_mapper=scrub_request_attributes)
 
@@ -1076,7 +1055,7 @@ def test_a_real_span_carries_the_same_pseudonym_as_the_matching_event(
         json={"person_uid": PERSON_UID, "view_type": "mensapass", "fields": ["display_name"]},
     )
 
-    spans = exporter.get_finished_spans()
+    spans = span_exporter.get_finished_spans()
     lookup_spans = [span for span in spans if "fastapi.arguments.values" in span.attributes]
     assert lookup_spans, "no span carried the FastAPI arguments attribute"
 
@@ -1206,7 +1185,7 @@ def test_without_a_salt_no_tag_is_attached(sentry_events, configured_environment
         assert "person" not in event.get("tags", {})
 
 
-def test_a_real_span_from_a_rejected_request_carries_no_person():
+def test_a_real_span_from_a_rejected_request_carries_no_person(span_exporter):
     """End to end, mirroring `test_a_real_span_carries_no_person` for the error path.
 
     Measured before this half of the mapper existed: a 422 from `/lookup` with
@@ -1215,13 +1194,6 @@ def test_a_real_span_from_a_rejected_request_carries_no_person():
     failure, not even an exception the application raised.
     """
     from edutap.data_provider.observability import scrub_request_attributes
-
-    exporter = InMemorySpanExporter()
-    logfire.configure(
-        send_to_logfire=False,
-        console=False,
-        additional_span_processors=[SimpleSpanProcessor(exporter)],
-    )
 
     app = FastAPI()
 
@@ -1242,7 +1214,7 @@ def test_a_real_span_from_a_rejected_request_carries_no_person():
     )
 
     assert response.status_code == 422, "the probe must exercise the validation-error path"
-    spans = [json.loads(span.to_json()) for span in exporter.get_finished_spans()]
+    spans = [json.loads(span.to_json()) for span in span_exporter.get_finished_spans()]
     assert spans, "no span recorded -- the mapper may have raised and been swallowed"
     blob = json.dumps(spans)
     assert PERSON_UID not in blob
