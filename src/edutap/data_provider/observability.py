@@ -77,8 +77,8 @@ def sentry_options(settings: ObservabilitySettings) -> dict[str, object]:
     """Return the options that decide what leaves the process.
 
     Each was chosen against a measurement, and the measurements are in the design
-    record. Two are worth naming here, because both contradict what the backend's
-    own documentation recommends:
+    record. Three are worth naming here, because each contradicts what the
+    backend's own documentation recommends:
 
     `include_local_variables=False` -- with local variables on, the raw
     `Authorization` header sits in the ASGI scope, which is a local in most frames
@@ -88,6 +88,26 @@ def sentry_options(settings: ObservabilitySettings) -> dict[str, object]:
 
     `max_request_body_size="never"` -- for this service the request body *is* the
     identifying datum, so there is no partial version of this.
+
+    `max_breadcrumbs=0` -- Sentry's `LoggingIntegration` is on by default and turns
+    every WARNING/ERROR `LogRecord` into a breadcrumb carrying the record's
+    formatted `message` verbatim and unscrubbed, on a path none of the other four
+    options constrains. Measured: `logger.warning("no view for person %s", uid)`
+    puts the person's uid at `breadcrumbs.values[0].message` on the wire. Today
+    this package logs exactly once, and that call names no value -- but the
+    invariant this module exists to hold ("no credential and no personal datum
+    leaves the process") has to survive the next line someone adds to it, not just
+    the lines it has today. A `before_breadcrumb` hook that drops only
+    `type == "log"` breadcrumbs was the narrower alternative, and was rejected:
+    it would need re-auditing against every other breadcrumb-producing
+    integration FastAPI or Sentry adds in the future, whereas turning breadcrumbs
+    off closes the whole surface with one option, the same call this module
+    already made for the request body. The cost is real: an event carries no
+    timeline of what happened earlier in the request. For a stateless,
+    single-route-per-request service that cost is small -- the exception, its
+    (variable-free) traceback and the route are still on the event -- and it is
+    the same trade this module made for local variables and the request body:
+    less to read, nothing left to guess is safe.
 
     Returned as a mapping rather than applied inline so a test can configure a fake
     transport with exactly these options, and cannot pass by being stricter than the
@@ -101,6 +121,7 @@ def sentry_options(settings: ObservabilitySettings) -> dict[str, object]:
         "send_default_pii": False,
         "include_local_variables": False,
         "max_request_body_size": "never",
+        "max_breadcrumbs": 0,
     }
 
 

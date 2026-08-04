@@ -89,9 +89,12 @@ def sentry_events():
 def _probe_app() -> FastAPI:
     """An application shaped like the real one where it matters: a body carrying a
     person, and a handler that fails after the body has been read."""
+    import logging
+
     from pydantic import BaseModel
 
     app = FastAPI()
+    logger = logging.getLogger("edutap.data_provider.probe")
 
     class Lookup(BaseModel):
         person_uid: str
@@ -100,6 +103,13 @@ def _probe_app() -> FastAPI:
 
     @app.post("/lookup")
     async def lookup(body: Lookup) -> dict:
+        # Shaped after the regression this probe exists to catch: an ordinary
+        # WARNING log call, naming the person it is about, written the way anyone
+        # adding diagnostics to a route would write it -- with no reason to know
+        # that Sentry's LoggingIntegration turns WARNING/ERROR log records into
+        # breadcrumbs that ship the formatted message verbatim, unscrubbed, on a
+        # path none of the five options constrains.
+        logger.warning("no view configured for person %s", body.person_uid)
         raise RuntimeError("the stored data for this person is unusable")
 
     return app
