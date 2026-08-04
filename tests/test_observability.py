@@ -722,12 +722,22 @@ def test_shutdown_against_an_unreachable_collector_is_bounded():
         # `sys.executable` and `code` are both hardcoded above, not untrusted
         # input -- this runs the same interpreter running the test suite, on a
         # literal string.
-        subprocess.run(  # noqa: S603  fixed interpreter, fixed literal script, no untrusted input
+        probe = subprocess.run(  # noqa: S603  fixed interpreter, fixed literal script, no untrusted input
             [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
         )
         elapsed = time.monotonic() - start
     finally:
         listener.close()
+
+    # Before the timing, because a child that died is fast: a renamed function, a
+    # missing logfire or a typo in the probe script above all exit non-zero within
+    # a few hundredths of a second, and every one of them would satisfy the bound
+    # below while exercising nothing at all. Measured, all three, at 0.02-0.35s.
+    assert probe.returncode == 0, (
+        f"the probe process exited {probe.returncode} instead of running to "
+        f"completion, so the time below measures its death rather than a bounded "
+        f"shutdown:\n{probe.stderr}"
+    )
 
     assert elapsed < 7, (
         f"shutdown took {elapsed:.1f}s -- must stay well clear of the "
