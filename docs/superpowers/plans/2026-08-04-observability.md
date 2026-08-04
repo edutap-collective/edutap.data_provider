@@ -515,6 +515,22 @@ def test_nothing_is_installed_without_a_dsn():
     assert not sentry_sdk.get_client().is_active()
 
 
+def test_a_malformed_dsn_does_not_stop_the_service(caplog):
+    """One typo in a deployment variable must not take the service down.
+
+    Measured before writing this: an unreachable DSN initialises fine, but a
+    malformed one raises `BadDsn` out of `sentry_sdk.init` itself. An error tracker
+    that prevents the service from starting has inverted its own purpose.
+    """
+    from edutap.data_provider.observability import install_observability
+
+    install_observability(ObservabilitySettings(sentry_dsn=SecretStr("bugsink.example/1")))
+
+    assert not sentry_sdk.get_client().is_active()
+    assert "EDUTAP_DATA_PROVIDER_SENTRY_DSN" in caplog.text
+    assert "bugsink.example" not in caplog.text, "the log names the variable, not the value"
+
+
 def test_an_empty_dsn_does_not_count_as_configured():
     """compose.yml writes `${VAR:-}`, which sets the variable to the empty string
     rather than leaving it unset. An empty DSN must mean off, not a broken client."""
@@ -570,13 +586,31 @@ def install_observability(settings: ObservabilitySettings) -> None:
     """Configure error reporting and tracing, or configure nothing at all.
 
     Never raises. An error tracker that stops the service from starting has inverted
-    its own purpose, so an unreachable or misconfigured backend must cost telemetry
-    and nothing else.
+    its own purpose, so a misconfigured backend must cost telemetry and nothing else.
+
+    The guard is narrow, and it is not speculative. Measured: an *unreachable* DSN
+    initialises fine and fails later in the background, while a *malformed* one --
+    `sentry_sdk.init("bugsink.example/1")`, a missing public key, one typo in a
+    deployment variable -- raises `BadDsn` from `init` itself and would take the
+    whole service down with it. logfire was measured under the analogous
+    misconfiguration, an unparseable endpoint, and does not raise from `configure`,
+    so it gets no guard it does not need.
     """
     dsn = settings.sentry_dsn.get_secret_value() if settings.sentry_dsn else ""
     if dsn:
-        sentry_sdk.init(dsn=dsn, **sentry_options(settings))
+        try:
+            sentry_sdk.init(dsn=dsn, **sentry_options(settings))
+        except BadDsn:
+            # `logging`, not `raise`: the service must come up. The DSN is a
+            # credential, so the message names the variable to go and fix and never
+            # the value that is wrong with it.
+            logging.getLogger(__name__).error(
+                "EDUTAP_DATA_PROVIDER_SENTRY_DSN is not a valid DSN; "
+                "error reporting is disabled for this process."
+            )
 ```
+
+with `import logging` and `from sentry_sdk.utils import BadDsn` at the top.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
