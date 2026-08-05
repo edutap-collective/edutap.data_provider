@@ -96,3 +96,21 @@ def test_entry_point_resolves_to_the_definition():
     points = [p for p in entry_points(group="edutap.db_definitions") if p.name == "schema"]
     assert points, "the edutap.db_definitions entry point is not installed"
     assert points[0].load() is definition
+
+
+def test_the_python_side_default_is_timezone_aware():
+    """`tz=UTC`, not a naive local time.
+
+    Mutation testing found `datetime.now(tz=UTC)` could become `datetime.now(tz=None)`
+    unnoticed. Both columns are `timestamptz`, so a naive value would be interpreted
+    against the server's time zone -- an `updated_at` silently wrong by the offset of
+    whichever machine happened to write the row, and wrong differently per machine.
+    """
+    from datetime import UTC
+
+    from edutap.data_provider.models.db import _utcnow
+
+    now = _utcnow()
+
+    assert now.tzinfo is not None
+    assert now.utcoffset() == UTC.utcoffset(None)

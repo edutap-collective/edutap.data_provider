@@ -1242,3 +1242,26 @@ def test_a_real_span_from_a_rejected_request_carries_no_person(span_exporter):
     blob = json.dumps(spans)
     assert PERSON_UID not in blob
     assert "missing" in blob, "the trace lost the information it exists for"
+
+
+def test_a_value_carrying_only_half_the_shape_is_not_treated_as_a_lookup():
+    """`and`, not `or`: both attributes, or the value is not one of ours.
+
+    Mutation testing found the conjunction could become a disjunction unnoticed.
+    The consequence is not a leak -- an unrecognised value is dropped outright,
+    which is the safe direction -- but it is the wrong reduction: a value with a
+    `view_type` and nothing else would be exported as a lookup with
+    `field_count: 0`, inventing a shape the caller never sent. The privacy control
+    of the OTLP half rests on this predicate, so it is pinned at both halves.
+    """
+    from edutap.data_provider.observability import scrub_request_attributes
+
+    class OnlyViewType:
+        view_type = "mensapass"
+
+    class OnlyFields:
+        fields = ["display_name"]
+
+    for probe in (OnlyViewType(), OnlyFields()):
+        result = scrub_request_attributes(None, {"values": {"request": probe}})
+        assert result["values"] == {}, f"{type(probe).__name__} was treated as a lookup"

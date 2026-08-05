@@ -44,6 +44,11 @@ dev = [
     # to fall back to the latter. Listing it here is what keeps that fallback — and
     # its deprecation warning — out of the test run.
     "httpx2>=2.9",
+    # Mutation testing, run by hand rather than in CI — see [tool.mutmut] below for
+    # what it is here to answer. Not in the default `make test-local` path: it runs
+    # the suite once per mutant, which is minutes rather than the second the suite
+    # itself takes.
+    "mutmut>=3.7",
     "pdbp",
     "pytest>=8.2",
     "pytest-asyncio>=0.24",
@@ -90,3 +95,29 @@ ignore = ["D203", "D213"]
 # words include "pass" — they are wallet-pass fields, not passwords. Scoped to this
 # one file, not all tests, so the check still applies to test code elsewhere.
 "tests/test_models.py" = ["S106"]
+
+[tool.mutmut]
+# Mutation testing answers the one question this package's test suite has got wrong
+# four times: not "does a test cover this line?" but "would any test notice if this
+# line changed?" Every one of those four was a test that was green for a reason
+# other than the one its name claimed — a mapper keyed on a parameter name that the
+# real application never uses, a bound-shutdown guard whose probe process could die
+# in a hundredth of a second and still satisfy it. A surviving mutant is exactly
+# that shape, found mechanically instead of by someone happening to look.
+#
+# The whole package, not a single file: mutmut copies the project into `mutants/`
+# and runs there, and a single-file target leaves the namespace package incomplete
+# ("No module named 'edutap.data_provider.api'").
+#
+# One trap worth knowing before reading a result: mutmut keys its verdicts on the
+# source it mutated, so adding a test to kill a survivor does not invalidate them.
+# A second run then finishes in 3 seconds instead of 47 and reports the identical
+# numbers while the survivors are in fact dead. Removing `mutants/mutmut-stats.json`
+# is not enough — the state lives in the whole `mutants/` tree, which is why
+# `make test-mutation` removes the directory rather than the file.
+source_paths = ["src/edutap/data_provider/"]
+# Anything the tests read from the repository root has to travel to that copy too.
+# `tests/test_docs.py` resolves ROOT as the parent of `tests/` and reads the
+# documentation set, the README and the example configuration from it; without this
+# they error in every mutant run and the results are noise rather than findings.
+also_copy = ["docs/", "README.md", "views.example.yaml"]

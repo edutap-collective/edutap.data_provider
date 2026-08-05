@@ -12,3 +12,6 @@ docs/_build/
 uv.lock
 
 .superpowers/
+
+# mutmut copies the whole project here to run the suite against each mutant.
+mutants/

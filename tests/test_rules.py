@@ -202,3 +202,77 @@ def test_coalesce_called_with_no_arguments_violates_its_variadic_minimum():
 
 def test_coalesce_called_with_one_argument_meets_its_variadic_minimum():
     parse_rule("coalesce(a)")
+
+
+# The comparison functions below are each pinned in BOTH directions, and the reason
+# is a measurement rather than thoroughness for its own sake. Mutation testing found
+# that every one of them was asserted once, in one direction only: `eq('a', 'a')`
+# expecting True was the whole of `eq`, and a single `gt(...)` expecting False was
+# the whole of `gt`. Making `eq` return its second argument compared with itself --
+# always True -- left all 41 tests in this file green, and so did making `gt` always
+# False. For a closed rule language, whose entire premise is that these functions and
+# no others exist, an operator that could be inverted unnoticed is the sharpest gap
+# the suite had.
+
+
+def test_eq_answers_in_both_directions():
+    assert run("eq('a', 'a')") is True
+    assert run("eq('a', 'b')") is False
+
+
+def test_gt_answers_in_both_directions():
+    assert run("gt(2, 1)") is True
+    assert run("gt(1, 2)") is False
+
+
+def test_lt_answers_in_both_directions():
+    assert run("lt(1, 2)") is True
+    assert run("lt(2, 1)") is False
+
+
+def test_lt_and_gt_are_strict_at_the_boundary():
+    """Equal operands are neither less than nor greater than each other.
+
+    Without this, `<` reading as `<=` -- an off-by-one an author makes without
+    noticing -- would change what a pass validity rule decides on its final day
+    while every other test stayed green.
+    """
+    assert run("lt(1, 1)") is False
+    assert run("gt(1, 1)") is False
+
+
+def test_is_empty_reads_its_own_argument():
+    """A one-argument function can still read the wrong one.
+
+    `arguments[0]` mutated to `arguments[1]` survived, because no test called
+    `is_empty` with a value whose emptiness differed from the value beside it.
+    """
+    assert run("is_empty(absent)", {}) is True
+    assert run("is_empty(present)", {"present": "a value"}) is False
+    assert run("is_empty(blank)", {"blank": ""}) is True
+    assert run("is_empty(empty_list)", {"empty_list": []}) is True
+
+
+def test_days_between_needs_both_dates_present():
+    """`or`, not `and`: one missing operand is enough to make the answer unknowable.
+
+    With `and`, a single present date would be subtracted from a `None` and raise
+    `TypeError` at request time -- the failure class the closed language exists to
+    prevent.
+    """
+    payload = {"start": "2026-07-30", "end": "2026-08-06"}
+    assert run("days_between(end, start)", payload) == 7
+    assert run("days_between(end, missing)", payload) is None
+    assert run("days_between(missing, start)", payload) is None
+    assert run("days_between(missing, also_missing)", payload) is None
+
+
+def test_a_date_is_read_from_exactly_the_first_ten_characters():
+    """The slice is `[:10]`, the length of an ISO date, and not a character more.
+
+    A datetime string is truncated to its date; `[:11]` would carry the `T` into
+    `date.fromisoformat` and turn a valid stored value into a request-time
+    `RuleError`.
+    """
+    payload = {"student_role_valid_until": "2026-09-30T23:59:59+02:00"}
+    assert run("student_role_valid_until", payload) == datetime.date(2026, 9, 30)
