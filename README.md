@@ -65,6 +65,16 @@ Configuration is `EDUTAP_DATA_PROVIDER_DATABASE_URL`, `..._CONFIG_PATH`,
 `..._API_TOKEN` and `..._ECHO_SQL`; `views.example.yaml` is a complete working view
 configuration.
 
+## Testing what the tests are worth
+
+`make test-mutation` changes one thing in the source at a time and asks whether any
+test notices. A surviving mutant is a line whose change nothing catches — which is a
+different and harder question than coverage, and the one this package kept getting
+wrong: the comparison functions of the rule language were each asserted in one
+direction only, so `eq` could have been inverted and the suite would have stayed
+green. It runs in about half a minute and is not a CI job, because roughly a third of
+the survivors are rewritten error messages that nobody asserts on.
+
 ## Dependencies and CI
 
 Every requirement is a lower bound, `uv.lock` is not committed, and

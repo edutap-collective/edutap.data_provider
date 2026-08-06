@@ -141,3 +141,32 @@ def test_an_empty_configured_token_authenticates_nobody(client):
     for headers in ({}, {"Authorization": "Bearer "}, {"Authorization": "Bearer"}):
         response = client.get("/catalogue", params={"view_type": "mensapass"}, headers=headers)
         assert response.status_code == 401, headers
+
+
+def test_a_token_containing_a_space_is_accepted_whole(tmp_path, monkeypatch):
+    """`partition`, not `rpartition`: the scheme is the FIRST word, not the last.
+
+    Mutation testing found that swapping the two survived the whole suite, because
+    every configured token here is a single word and the two split identically on
+    those. They differ the moment a token contains a space: `rpartition` would read
+    `Bearer my` as the scheme, fail the `bearer` comparison, and answer 401 to a
+    caller presenting the correct credential. A generated token is usually
+    space-free, but nothing in this package promises that, and an authentication
+    boundary should not depend on an unstated assumption about a secret's alphabet.
+    """
+    token = "a token with spaces"  # noqa: S105  a probe value, not a credential
+    path = tmp_path / "views.yaml"
+    path.write_text(CONFIG)
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_DATABASE_URL", "postgresql+asyncpg://u:p@h/db")
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_CONFIG_PATH", str(path))
+    monkeypatch.setenv("EDUTAP_DATA_PROVIDER_API_TOKEN", token)
+    app = create_app()
+    app.dependency_overrides[get_provider_config] = lambda: load_config(path)
+
+    response = TestClient(app).get(
+        "/catalogue",
+        params={"view_type": "mensapass"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
