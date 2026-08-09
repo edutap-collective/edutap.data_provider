@@ -8,10 +8,11 @@ from edutap.data_provider.models.db import PassState, PersonView
 def test_tables_live_on_the_package_metadata_only():
     from sqlmodel import SQLModel
 
+    # `pass_instance` joins this set in task 4 of the schema-split plan; until then
+    # its absence is the correct, current state, not a gap to "complete".
     assert set(metadata.tables) == {
         "public.person_view",
         "public.pass_state",
-        "public.pass_instance",
     }
     assert "public.person_view" not in SQLModel.metadata.tables
 
@@ -24,7 +25,9 @@ def test_contract_tables_declare_the_public_schema_explicitly():
     two deployments of one package with different layouts. Declaring the schema
     removes the ambiguity.
     """
-    for name in ("person_view", "pass_state", "pass_instance"):
+    # `pass_instance` joins this tuple in task 4 of the schema-split plan; until
+    # then its absence is the correct, current state, not a gap to "complete".
+    for name in ("person_view", "pass_state"):
         assert metadata.tables[f"public.{name}"].schema == "public"
 
 
