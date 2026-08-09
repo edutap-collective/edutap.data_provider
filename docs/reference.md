@@ -402,7 +402,8 @@ not enforce the values.
 
 ## Database tables
 
-The package owns two tables and reads both. It never creates them: the DDL is
+The package owns two tables today and reads both — a third, `pass_instance`, is on
+the way. It never creates them: the DDL is
 rendered and applied by `edutap.db_definitions`, which this package announces its
 metadata to through the `edutap.db_definitions` entry point. Constraint and index
 names follow the shared naming convention, and the Alembic version table is
@@ -421,6 +422,7 @@ One view of one person: the payload a consumer of this view type may see.
 | `person_uid` | `VARCHAR(64) COLLATE "C"`, primary key part | person identifier, uniquely determinable by the university: ePPN, UUID or hash. Never interpreted here. Byte collation, so comparison and index order do not depend on a locale |
 | `view_type` | `VARCHAR(64) COLLATE "C"`, primary key part | `full_view` or a speaking slice such as `mensapass` |
 | `data` | `JSONB`, not null | the payload |
+| `photo` | `JSONB`, nullable | photograph. JSONB rather than bytea so the source stays open: `{"s3_key": …}`, `{"url": …}` or `{"base64": …}`. A consumer fetches the image itself instead of it riding along in every query |
 | `updated_at` | `TIMESTAMPTZ`, not null | maintained by the database |
 
 The primary key is **composite**, `(person_uid, view_type)` — exactly one row per
@@ -435,6 +437,11 @@ Payload rules, binding for producers:
 * arrays where an attribute is genuinely multi-valued, such as `mail` or
   `eduperson_affiliation`;
 * a photo is a flat reference, never bytes and never an object.
+
+That last rule is about a photo reference **inside `data`** — a producer that
+chooses to carry one there still may not inline the bytes or a nested object. The
+`photo` column above is a separate, dedicated slot outside `data` and is unrelated
+to that rule.
 
 ### `pass_state`
 

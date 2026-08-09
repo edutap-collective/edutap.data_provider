@@ -1,4 +1,5 @@
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 
 from edutap.data_provider.models.base import NAMING_CONVENTION, metadata
 from edutap.data_provider.models.db import PassState, PersonView
@@ -7,8 +8,35 @@ from edutap.data_provider.models.db import PassState, PersonView
 def test_tables_live_on_the_package_metadata_only():
     from sqlmodel import SQLModel
 
-    assert set(metadata.tables) == {"person_view", "pass_state"}
-    assert "person_view" not in SQLModel.metadata.tables
+    assert set(metadata.tables) == {
+        "public.person_view",
+        "public.pass_state",
+        "public.pass_instance",
+    }
+    assert "public.person_view" not in SQLModel.metadata.tables
+
+
+def test_contract_tables_declare_the_public_schema_explicitly():
+    """Without the declaration the target schema depends on `search_path`.
+
+    Measured 2026-08-09: with role `edutap` and a schema of the same name the
+    tables landed in `edutap` locally, while production resolved to `public` —
+    two deployments of one package with different layouts. Declaring the schema
+    removes the ambiguity.
+    """
+    for name in ("person_view", "pass_state", "pass_instance"):
+        assert metadata.tables[f"public.{name}"].schema == "public"
+
+
+def test_person_view_carries_a_photo_reference():
+    """JSONB, not bytea: the source stays open — `s3_key`, `url` or `base64`.
+
+    A consumer then fetches the image itself instead of it being carried through
+    every query.
+    """
+    column = metadata.tables["public.person_view"].columns["photo"]
+    assert isinstance(column.type, JSONB)
+    assert column.nullable
 
 
 def test_naming_convention_is_the_canonical_one():
@@ -16,48 +44,48 @@ def test_naming_convention_is_the_canonical_one():
 
 
 def test_person_view_has_a_composite_primary_key():
-    table = metadata.tables["person_view"]
+    table = metadata.tables["public.person_view"]
     assert [column.name for column in table.primary_key.columns] == ["person_uid", "view_type"]
 
 
 def test_person_view_keys_use_byte_collation():
-    table = metadata.tables["person_view"]
+    table = metadata.tables["public.person_view"]
     for name in ("person_uid", "view_type"):
         assert table.columns[name].type.collation == "C"
 
 
 def test_person_view_indexes_view_type_for_whole_view_reads():
-    table = metadata.tables["person_view"]
+    table = metadata.tables["public.person_view"]
     indexed = {tuple(column.name for column in index.columns) for index in table.indexes}
     assert ("view_type",) in indexed
 
 
 def test_pass_state_identifier_is_a_string_not_a_uuid():
-    column = metadata.tables["pass_state"].columns["pass_id"]
+    column = metadata.tables["public.pass_state"].columns["pass_id"]
     assert isinstance(column.type, sa.String)
     assert column.type.length == 255
     assert column.primary_key
 
 
 def test_pass_state_has_no_foreign_key_to_the_person():
-    assert metadata.tables["pass_state"].foreign_keys == set()
+    assert metadata.tables["public.pass_state"].foreign_keys == set()
 
 
 def test_pass_state_indexes_the_question_readers_ask():
-    table = metadata.tables["pass_state"]
+    table = metadata.tables["public.pass_state"]
     indexed = {tuple(column.name for column in index.columns) for index in table.indexes}
     assert ("person_uid", "pass_template", "wallet_type") in indexed
 
 
 def test_vocabulary_columns_are_text_not_native_enums():
-    table = metadata.tables["pass_state"]
+    table = metadata.tables["public.pass_state"]
     for name in ("wallet_type", "state"):
         assert isinstance(table.columns[name].type, sa.String)
         assert not isinstance(table.columns[name].type, sa.Enum)
 
 
 def test_variant_is_optional_because_a_default_exists():
-    assert metadata.tables["pass_state"].columns["pass_template_variant"].nullable
+    assert metadata.tables["public.pass_state"].columns["pass_template_variant"].nullable
 
 
 def test_models_are_usable_as_python_objects():
@@ -82,7 +110,7 @@ def test_schema_definition_announces_this_package():
     assert definition.name == "edutap.data_provider"
     assert definition.metadata is metadata
     assert definition.version_table == "alembic_version_data_provider"
-    assert sorted(definition.table_names) == ["pass_state", "person_view"]
+    assert sorted(definition.table_names) == ["public.pass_state", "public.person_view"]
 
 
 def test_entry_point_resolves_to_the_definition():

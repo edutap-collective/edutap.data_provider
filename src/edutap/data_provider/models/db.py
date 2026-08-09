@@ -28,7 +28,12 @@ class PersonView(Base, table=True):
     """One view of one person: the payload a consumer of this view type may see."""
 
     __tablename__ = "person_view"
-    __table_args__ = (sa.Index("ix_person_view_view_type", "view_type"),)
+    __table_args__ = (
+        sa.Index("ix_person_view_view_type", "view_type"),
+        # Declared, not inherited: `search_path` would otherwise decide, and it
+        # resolves differently per deployment (see tests).
+        {"schema": "public"},
+    )
 
     person_uid: str = Field(
         sa_column=sa.Column(sa.String(64, collation="C"), primary_key=True),
@@ -47,6 +52,15 @@ class PersonView(Base, table=True):
         sa_column=sa.Column(JSONB, nullable=False),
         description="Flat payload, standard-native names, arrays for multi-valued attributes.",
     )
+    photo: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=sa.Column(JSONB, nullable=True),
+        description=(
+            "Photograph. JSONB rather than bytea so the source stays open: "
+            "{'s3_key': ...} | {'url': ...} | {'base64': ...}. A consumer fetches "
+            "the image itself instead of it riding along in every query."
+        ),
+    )
     updated_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp(on_update=True))
 
 
@@ -59,6 +73,9 @@ class PassState(Base, table=True):
         sa.Index(
             "ix_pass_state_person_template_wallet", "person_uid", "pass_template", "wallet_type"
         ),
+        # Declared, not inherited: `search_path` would otherwise decide, and it
+        # resolves differently per deployment (see tests).
+        {"schema": "public"},
     )
 
     pass_id: str = Field(
