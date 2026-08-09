@@ -6,7 +6,7 @@ it consumes — `edutap.pass_builder` would depend on the data provider. The sam
 applies to the naming convention in `models/base.py`, for the same reason.
 
 Where that dependency already exists the recommendation has nothing left to protect,
-so importing is available and supported. These three enumerations are deliberately
+so importing is available and supported. These five enumerations are deliberately
 re-exported from the package root (`from edutap.data_provider import WalletType`) as
 well as from this module; both spellings are public API.
 
@@ -30,18 +30,49 @@ class WalletType(StrEnum):
     SAMSUNG_ACCESS = "SAMSUNG_ACCESS"
 
 
-class PassLifecycleState(StrEnum):
-    """Where a pass stands in its life.
+class IssuanceState(StrEnum):
+    """What the issuer has done or wants — entirely under its own control.
 
-    The data provider stores and delivers these; it never validates a transition.
+    Separate from what is observed at the holder: Google's `State` is an issuer
+    declaration, Apple's registrations are an observation of what the user did.
+    Pressing both into one column never adds up, however the values are sorted.
     """
 
-    NEW = "NEW"
-    INSTALL_PENDING = "INSTALL_PENDING"
-    UPDATE_PENDING = "UPDATE_PENDING"
-    DELETE_PENDING = "DELETE_PENDING"
+    CREATED = "CREATED"
+    ISSUED = "ISSUED"
+    REVOKED = "REVOKED"
+    EXPIRED = "EXPIRED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class HolderState(StrEnum):
+    """Whether the pass is present at the holder — derived, never set.
+
+    `PRESENT` when at least one instance is `ACTIVE`; `SUSPENDED` when instances
+    exist, none is active and at least one is suspended; `NOT_PRESENT` otherwise.
+    The pass-state consumer maintains it in the same transaction that changes an
+    instance, so the stored value cannot drift from the instances it summarises.
+    """
+
+    NOT_PRESENT = "NOT_PRESENT"
+    PRESENT = "PRESENT"
+    SUSPENDED = "SUSPENDED"
+
+
+class InstanceState(StrEnum):
+    """One exemplar of a pass at the holder.
+
+    What an exemplar is depends on the platform: a device registration or a
+    provisioned credential at Apple, the save into the account at Google.
+    """
+
+    PROVISIONING = "PROVISIONING"
     ACTIVE = "ACTIVE"
-    INACTIVE = "INACTIVE"
+    SUSPENDED = "SUSPENDED"
+    REMOVED_BY_HOLDER = "REMOVED_BY_HOLDER"
+    REMOVED_BY_ISSUER = "REMOVED_BY_ISSUER"
+    FAILED = "FAILED"
 
 
 class FieldKind(StrEnum):

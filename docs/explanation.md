@@ -32,12 +32,51 @@ Three parties write instead, all outside this process:
 * **A producer** fills `person_view`. At LMU that is the VZD webhook, from directory
   events. Which fields it writes follows from the view configuration; how it obtains
   them is its own business, and deliberately not this package's.
-* **The worker** writes `pass_state` from Kafka events. Callback handlers and
-  webhooks publish events, they never touch the database.
+* **The pass-state consumer** writes `pass_state` and `pass_instance`, both from
+  Kafka events, and both in the same transaction. That is what keeps the stored
+  `pass_state.holder_state` from drifting from the instances it summarises: there
+  is exactly one writer for both tables, and it never commits one without the
+  other. Callback handlers and webhooks publish events, they never touch the
+  database.
 
 The gain is not tidiness. A read-only service cannot corrupt the record it serves,
 its failure modes are limited to answering wrongly rather than storing wrongly, and
 it can be scaled or restarted without a thought about write consistency.
+
+## Why `pass_state` has a watermark and `person_view` does not
+
+`pass_state.last_event_at` guards every write: the upsert applies only when the
+incoming `edutap-occurred-at` is younger than the stored value, so a late event
+hits zero rows instead of overwriting a newer state. `person_view` has no such
+column, and that is a decision, not an oversight — it follows from what the two
+Kafka events actually carry.
+
+For `pass_state`, the event *is* the state: `pass.state` and `device.registration`
+messages carry the values the row is supposed to hold, so comparing their
+timestamps to decide which write should win is comparing the right thing.
+
+For `person_view`, the event is only a **trigger**: "fetch this person's current
+data." The row's freshness depends on when the producer read LDAP afterwards, not
+on when the Kafka message arrived — and a guard on the event time would measure
+the wrong moment:
+
+```text
+Trigger A (12:00)  ->  reads LDAP at 12:05  ->  data from 12:05
+Trigger B (12:01)  ->  reads LDAP at 12:02  ->  data from 12:02
+```
+
+If A writes after B, a guard keyed on the event time would reject exactly the
+write carrying the *newer* LDAP data, because event A is older than event B.
+`updated_at` does not help either: it is the write time, and the later write
+always has the later write time, so a guard on it would always be true and would
+protect against nothing.
+
+So `person_view` deliberately has no watermark: the last writer wins. Because a
+producer's usual sequence is trigger, then read LDAP, then write, the later
+writer is almost always also the later reader, and the pathological ordering
+above is rare and self-healing — the next trigger corrects it. The cost is a
+short window with a slightly stale LDAP snapshot, bounded by the next trigger.
+That is an accepted trade-off, not a gap the table happens to have.
 
 ## Why the API is mandatory and the SQL profile is optional
 
@@ -133,10 +172,21 @@ writes.
 
 ## Why copying the vocabulary is recommended, and when importing is right
 
-`WalletType` and `PassLifecycleState` exist here as `StrEnum`s. They are exported
-from the package root as well as from `edutap.data_provider.vocabulary`, so a
-consumer can import them — and the recommendation is nevertheless that most
-consumers **copy** the values instead.
+`WalletType`, `IssuanceState`, `HolderState` and `InstanceState` exist here as
+`StrEnum`s. The latter three replace what used to be a single `PassLifecycleState`,
+split along the two axes a pass actually has. `IssuanceState` is what the issuer has
+done or wants — `CREATED`, `ISSUED`, `REVOKED` and so on — entirely under its own
+control and unaffected by what happens at the holder. `InstanceState` is the other
+axis: one exemplar of the pass at the holder, such as a device registration at Apple
+or the save into the account at Google. `HolderState` is not a third, independent
+axis; it is `NOT_PRESENT` / `PRESENT` / `SUSPENDED`, derived from the `InstanceState`
+values of all of a pass's exemplars and never set directly. A wallet provider reports
+one of the two real axes or the other — Google's `State` is an issuer declaration,
+Apple's device registrations are an observation at the holder — and no single column
+could carry both without conflating them. All four enumerations are exported from the
+package root as well as from `edutap.data_provider.vocabulary`, so a consumer can
+import them — and the recommendation is nevertheless that most consumers **copy** the
+values instead.
 
 The reason is a dependency direction. `edutap.pass_builder` consumes this service; if
 it imported the vocabulary from here, its dependency would point at the thing it
@@ -153,7 +203,7 @@ copying, and for it a copy is simply a second definition that can drift. So the
 import is deliberately available and supported:
 
 ```python
-from edutap.data_provider import PassLifecycleState, WalletType
+from edutap.data_provider import IssuanceState, WalletType
 ```
 
 Read the recommendation as being about the dependency, not about the import

@@ -80,19 +80,20 @@ def test_every_wallet_type_is_documented():
         assert f"`{wallet_type.value}`" in vocabulary, f"{wallet_type.value} undocumented"
 
 
-def test_every_pass_lifecycle_state_is_documented():
-    from edutap.data_provider.vocabulary import PassLifecycleState
+def test_every_state_vocabulary_is_documented():
+    from edutap.data_provider.vocabulary import HolderState, InstanceState, IssuanceState
 
     vocabulary = section_of((DOCS / "reference.md").read_text(), "Vocabulary")
-    for state in PassLifecycleState:
-        assert f"`{state.value}`" in vocabulary, f"{state.value} undocumented"
+    for enumeration in (IssuanceState, HolderState, InstanceState):
+        for state in enumeration:
+            assert f"`{state.value}`" in vocabulary, f"{state.value} undocumented"
 
 
 def test_every_table_column_is_documented():
-    from edutap.data_provider.models.db import PassState, PersonView
+    from edutap.data_provider.models.db import PassInstance, PassState, PersonView
 
     reference = (DOCS / "reference.md").read_text()
-    for model in (PersonView, PassState):
+    for model in (PersonView, PassState, PassInstance):
         assert f"`{model.__tablename__}`" in reference
         # The table's own section, not the whole page: `person_uid` is a column of
         # both tables, so a page-wide search would accept one table's column list

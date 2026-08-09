@@ -373,7 +373,7 @@ mapping rules against these when a template version is published.
 
 ## Vocabulary
 
-Two enumerations. A consumer may either copy their values or import them, and which
+Four enumerations. A consumer may either copy their values or import them, and which
 of the two is right follows from whether it already depends on this package:
 
 * A consumer that must **not** depend on the data provider — `edutap.pass_builder`,
@@ -383,26 +383,37 @@ of the two is right follows from whether it already depends on this package:
   root or from the submodule; both are part of the public API:
 
   ```python
-  from edutap.data_provider import PassLifecycleState, WalletType
+  from edutap.data_provider import IssuanceState, WalletType
   ```
 
 `WalletType`: `GOOGLE_ST`, `GOOGLE_ACCESS`, `APPLE_VAS`, `APPLE_ACCESS`,
 `APPLE_IDENTITY`, `SAMSUNG_ST`, `SAMSUNG_ACCESS`.
 
-`PassLifecycleState`: `NEW`, `INSTALL_PENDING`, `UPDATE_PENDING`, `DELETE_PENDING`,
-`ACTIVE`, `INACTIVE`.
+* **`IssuanceState`** — what the issuer has done or wants, entirely under its own
+  control: `CREATED`, `ISSUED`, `REVOKED`, `EXPIRED`, `COMPLETED`, `FAILED`.
+* **`HolderState`** — whether the pass is present at the holder, **derived** from
+  `pass_instance` and never set: `NOT_PRESENT`, `PRESENT`, `SUSPENDED`.
+* **`InstanceState`** — one exemplar at the holder: `PROVISIONING`, `ACTIVE`,
+  `SUSPENDED`, `REMOVED_BY_HOLDER`, `REMOVED_BY_ISSUER`, `FAILED`.
 
-Both are stored in text columns rather than native enums, so a new wallet provider
+All are stored in text columns rather than native enums, so a new wallet provider
 does not force a migration in every installation. The price is that the database does
 not enforce the values.
 
 ## Database tables
 
-The package owns two tables and reads both. It never creates them: the DDL is
-rendered and applied by `edutap.db_definitions`, which this package announces its
+The package owns three tables and reads all of them. It never creates them: the DDL
+is rendered and applied by `edutap.db_definitions`, which this package announces its
 metadata to through the `edutap.db_definitions` entry point. Constraint and index
 names follow the shared naming convention, and the Alembic version table is
 `alembic_version_data_provider`.
+
+All three live in the schema `public`, declared explicitly on each table rather than
+inherited from `search_path`. In this deployment `public` is not a default dumping
+ground: it is the one schema read across package boundaries, by other eduTAP
+packages and by HEIDI Local alike. A table's presence there is therefore itself part
+of the contract — what is in `public` is interface, deliberately, not merely
+whatever happened to land there.
 
 ```console
 $ edutap-dbdef create --packages edutap.data_provider --out schema.sql
@@ -417,6 +428,7 @@ One view of one person: the payload a consumer of this view type may see.
 | `person_uid` | `VARCHAR(64) COLLATE "C"`, primary key part | person identifier, uniquely determinable by the university: ePPN, UUID or hash. Never interpreted here. Byte collation, so comparison and index order do not depend on a locale |
 | `view_type` | `VARCHAR(64) COLLATE "C"`, primary key part | `full_view` or a speaking slice such as `mensapass` |
 | `data` | `JSONB`, not null | the payload |
+| `photo` | `JSONB`, nullable | photograph. JSONB rather than bytea so the source stays open: `{"s3_key": …}`, `{"url": …}` or `{"base64": …}`. A consumer fetches the image itself instead of it riding along in every query |
 | `updated_at` | `TIMESTAMPTZ`, not null | maintained by the database |
 
 The primary key is **composite**, `(person_uid, view_type)` — exactly one row per
@@ -432,19 +444,28 @@ Payload rules, binding for producers:
   `eduperson_affiliation`;
 * a photo is a flat reference, never bytes and never an object.
 
+That last rule is about a photo reference **inside `data`** — a producer that
+chooses to carry one there still may not inline the bytes or a nested object. The
+`photo` column above is a separate, dedicated slot outside `data` and is unrelated
+to that rule.
+
 ### `pass_state`
 
-One issued pass and where it stands in its life. One row per issued pass instance,
-not per combination.
+One row per issued pass. `pass_id` alone is the key — a pass exists once here
+regardless of how many `pass_instance` rows it has, from none up to n.
 
 | Column | Type | Meaning |
 |---|---|---|
 | `pass_id` | `VARCHAR(255)`, primary key | the provider's pass identifier. Not a UUID column: usually a UUID, but Google Wallet object identifiers carry a prefix and suffix |
 | `person_uid` | `VARCHAR(64) COLLATE "C"`, not null | as above. **No foreign key**: a pass exists whether or not a view row currently does |
 | `wallet_type` | `VARCHAR(32)`, not null | a `WalletType` value |
-| `state` | `VARCHAR(32)`, not null | a `PassLifecycleState` value. Stored and delivered, never validated here |
+| `issuance_state` | `VARCHAR(32)`, not null | an `IssuanceState` value: what the issuer did or wants. Stored and delivered, never validated here |
+| `holder_state` | `VARCHAR(32)`, not null | a `HolderState` value. Derived, but stored — maintained by the pass-state consumer in the same transaction as `pass_instance`, which is exactly why the stored value cannot drift from the instances it summarises |
+| `version` | `INTEGER`, not null, default `0` | rises on every change of content; compared against `PassInstance.synced_version` |
 | `pass_template` | `VARCHAR(64)`, not null | speaking template key, matching `Template.key` in `edutap.pass_builder` |
 | `pass_template_variant` | `VARCHAR(64)`, nullable | variant key; empty means the default variant, which `pass_builder` models as `is_default` |
+| `provider_raw` | `JSONB`, nullable | what the provider actually said, kept so a later dispute can be settled |
+| `last_event_at` | `TIMESTAMPTZ`, not null | the watermark: the upsert writes only when `edutap-occurred-at` is younger than this value, so a late event hits zero rows instead of overwriting a newer state |
 | `created_at` | `TIMESTAMPTZ`, not null | issued at |
 | `updated_at` | `TIMESTAMPTZ`, not null | last changed |
 
@@ -455,11 +476,37 @@ Indexes: `ix_pass_state_person_uid` on `person_uid`, and
 The HTTP API does not expose `pass_state`. It is read through the
 [SQL profile](how-to.md#let-a-sql-consumer-read-the-tables-directly).
 
+### `pass_instance`
+
+One exemplar of a pass at the holder — zero to n rows per `pass_state` row. What an
+exemplar is depends on the platform: a device registration or a provisioned
+credential at Apple, the save into the account at Google. That platform-dependence is
+exactly why this state cannot live on `pass_state` itself.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `pass_id` | `VARCHAR(255)`, primary key part | foreign key to `pass_state.pass_id`, `ON DELETE CASCADE` |
+| `instance_ref` | `VARCHAR(255)`, primary key part | the identity under which the platform tracks this exemplar: the `deviceLibraryIdentifier` at Apple VAS, the provisioned credential at Apple Access, the fixed literal `account` at Google — there is exactly one exemplar per pass and no identifier is given, and the literal keeps the key usable and the upsert idempotent instead of faking one. Open for Samsung and EUDI |
+| `instance_state` | `VARCHAR(32)`, not null | an `InstanceState` value |
+| `synced_version` | `INTEGER`, nullable | which `pass_state.version` this exemplar provably holds; `null` before anything is known about it |
+| `provider_raw` | `JSONB`, nullable | what the platform delivered, verbatim |
+| `last_event_at` | `TIMESTAMPTZ`, not null | watermark, same rule as on `pass_state` |
+| `created_at` | `TIMESTAMPTZ`, not null | first seen |
+| `updated_at` | `TIMESTAMPTZ`, not null | last changed |
+
+There is no separate device column: `instance_ref` already carries the platform's
+identity for the exemplar, and a second column would hold the same string at Apple
+VAS and nothing at Google. Device detail, if ever needed, is in `provider_raw` as the
+platform delivered it.
+
+The HTTP API does not expose `pass_instance`. It is read through the
+[SQL profile](how-to.md#let-a-sql-consumer-read-the-tables-directly).
+
 ## Python entry points
 
 | Object | Purpose |
 |---|---|
 | `edutap.data_provider.api.app:create_app` | the FastAPI application factory; run it with `uvicorn … --factory` |
 | `edutap.data_provider.models.dbdef:definition` | the `SchemaDefinition` announced to `edutap.db_definitions` |
-| `edutap.data_provider` | the package root re-exports `WalletType`, `PassLifecycleState`, `FieldKind` and `__version__` |
-| `edutap.data_provider.vocabulary` | where those three enumerations are defined |
+| `edutap.data_provider` | the package root re-exports `WalletType`, `IssuanceState`, `HolderState`, `InstanceState`, `FieldKind` and `__version__` |
+| `edutap.data_provider.vocabulary` | where those five enumerations are defined |

@@ -36,8 +36,9 @@ which reads the table definitions this package announces through an entry point:
 $ .venv/bin/edutap-dbdef create --packages edutap.data_provider --out schema.sql
 ```
 
-Look at `schema.sql`: it contains `person_view` and `pass_state`, their indexes, and
-nothing else. Apply it inside the database container:
+Look at `schema.sql`: it contains `person_view`, `pass_state` and `pass_instance`,
+their indexes and foreign key, and nothing else. Apply it inside the database
+container:
 
 ```console
 $ docker compose exec -T db psql -U data_provider -d data_provider < schema.sql
@@ -47,6 +48,7 @@ CREATE INDEX
 CREATE INDEX
 CREATE TABLE
 CREATE INDEX
+CREATE TABLE
 COMMIT
 ```
 
