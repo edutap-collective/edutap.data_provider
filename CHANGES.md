@@ -14,3 +14,11 @@
   exception is the text of an exception message, which reaches both backends
   unfiltered — named, with its consequences, under "What leaves the process, and
   what does not" in `docs/explanation.md`.
+- The pass lifecycle is now two axes: `IssuanceState` (the issuer's own) and
+  `HolderState` (derived from the instances). `PassLifecycleState` is gone.
+- `pass_state` rebuilt accordingly, with a `version` counter, the
+  `last_event_at` watermark and `provider_raw`.
+- New table `pass_instance`: zero to n exemplars of a pass at the holder.
+- `person_view` carries a `photo` reference (JSONB, source deliberately open).
+- All three tables declare the schema `public` explicitly instead of inheriting
+  it from `search_path`.
