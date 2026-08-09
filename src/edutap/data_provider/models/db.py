@@ -165,6 +165,7 @@ class PassInstance(Base, table=True):
             sa.ForeignKey("public.pass_state.pass_id", ondelete="CASCADE"),
             primary_key=True,
         ),
+        description="The pass this exemplar belongs to. Deleting the pass deletes its instances.",
     )
     instance_ref: str = Field(
         sa_column=sa.Column(sa.String(255), primary_key=True),

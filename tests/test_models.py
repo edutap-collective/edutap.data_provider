@@ -62,6 +62,19 @@ def test_person_view_indexes_view_type_for_whole_view_reads():
     assert ("view_type",) in indexed
 
 
+def test_person_view_deliberately_has_no_watermark():
+    """Unlike `pass_state`, `person_view` guards nothing against a late write.
+
+    The Kafka event here is only a trigger to re-read LDAP; the row's freshness
+    depends on when that read happened, not on when the event arrived, so a
+    watermark on the event time would reject exactly the write carrying newer
+    data. See "Why `pass_state` has a watermark and `person_view` does not" in
+    docs/explanation.md. Nailed down here so a later "unify the two tables"
+    change finds resistance instead of silence.
+    """
+    assert "last_event_at" not in metadata.tables["public.person_view"].columns
+
+
 def test_pass_state_identifier_is_a_string_not_a_uuid():
     """Usually a UUID, but Google object identifiers carry a prefix and suffix."""
     column = metadata.tables["public.pass_state"].columns["pass_id"]
@@ -116,10 +129,14 @@ def test_pass_state_indexes_the_question_readers_ask():
 
 
 def test_vocabulary_columns_are_text_not_native_enums():
-    table = metadata.tables["public.pass_state"]
+    pass_state = metadata.tables["public.pass_state"]
     for name in ("wallet_type", "issuance_state", "holder_state"):
-        assert isinstance(table.columns[name].type, sa.String)
-        assert not isinstance(table.columns[name].type, sa.Enum)
+        assert isinstance(pass_state.columns[name].type, sa.String)
+        assert not isinstance(pass_state.columns[name].type, sa.Enum)
+
+    instance_state = metadata.tables["public.pass_instance"].columns["instance_state"]
+    assert isinstance(instance_state.type, sa.String)
+    assert not isinstance(instance_state.type, sa.Enum)
 
 
 def test_variant_is_optional_because_a_default_exists():
