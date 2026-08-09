@@ -133,10 +133,21 @@ writes.
 
 ## Why copying the vocabulary is recommended, and when importing is right
 
-`WalletType` and `PassLifecycleState` exist here as `StrEnum`s. They are exported
-from the package root as well as from `edutap.data_provider.vocabulary`, so a
-consumer can import them — and the recommendation is nevertheless that most
-consumers **copy** the values instead.
+`WalletType`, `IssuanceState`, `HolderState` and `InstanceState` exist here as
+`StrEnum`s. The latter three replace what used to be a single `PassLifecycleState`,
+split along the two axes a pass actually has. `IssuanceState` is what the issuer has
+done or wants — `CREATED`, `ISSUED`, `REVOKED` and so on — entirely under its own
+control and unaffected by what happens at the holder. `InstanceState` is the other
+axis: one exemplar of the pass at the holder, such as a device registration at Apple
+or the save into the account at Google. `HolderState` is not a third, independent
+axis; it is `NOT_PRESENT` / `PRESENT` / `SUSPENDED`, derived from the `InstanceState`
+values of all of a pass's exemplars and never set directly. A wallet provider reports
+one of the two real axes or the other — Google's `State` is an issuer declaration,
+Apple's device registrations are an observation at the holder — and no single column
+could carry both without conflating them. All four enumerations are exported from the
+package root as well as from `edutap.data_provider.vocabulary`, so a consumer can
+import them — and the recommendation is nevertheless that most consumers **copy** the
+values instead.
 
 The reason is a dependency direction. `edutap.pass_builder` consumes this service; if
 it imported the vocabulary from here, its dependency would point at the thing it
@@ -153,7 +164,7 @@ copying, and for it a copy is simply a second definition that can drift. So the
 import is deliberately available and supported:
 
 ```python
-from edutap.data_provider import PassLifecycleState, WalletType
+from edutap.data_provider import IssuanceState, WalletType
 ```
 
 Read the recommendation as being about the dependency, not about the import
