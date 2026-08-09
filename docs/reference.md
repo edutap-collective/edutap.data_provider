@@ -408,6 +408,13 @@ metadata to through the `edutap.db_definitions` entry point. Constraint and inde
 names follow the shared naming convention, and the Alembic version table is
 `alembic_version_data_provider`.
 
+All three live in the schema `public`, declared explicitly on each table rather than
+inherited from `search_path`. In this deployment `public` is not a default dumping
+ground: it is the one schema read across package boundaries, by other eduTAP
+packages and by HEIDI Local alike. A table's presence there is therefore itself part
+of the contract — what is in `public` is interface, deliberately, not merely
+whatever happened to land there.
+
 ```console
 $ edutap-dbdef create --packages edutap.data_provider --out schema.sql
 ```
@@ -444,8 +451,8 @@ to that rule.
 
 ### `pass_state`
 
-One issued pass and where it stands in its life. One row per issued pass instance,
-not per combination.
+One row per issued pass. `pass_id` alone is the key — a pass exists once here
+regardless of how many `pass_instance` rows it has, from none up to n.
 
 | Column | Type | Meaning |
 |---|---|---|

@@ -32,12 +32,51 @@ Three parties write instead, all outside this process:
 * **A producer** fills `person_view`. At LMU that is the VZD webhook, from directory
   events. Which fields it writes follows from the view configuration; how it obtains
   them is its own business, and deliberately not this package's.
-* **The worker** writes `pass_state` from Kafka events. Callback handlers and
-  webhooks publish events, they never touch the database.
+* **The pass-state consumer** writes `pass_state` and `pass_instance`, both from
+  Kafka events, and both in the same transaction. That is what keeps the stored
+  `pass_state.holder_state` from drifting from the instances it summarises: there
+  is exactly one writer for both tables, and it never commits one without the
+  other. Callback handlers and webhooks publish events, they never touch the
+  database.
 
 The gain is not tidiness. A read-only service cannot corrupt the record it serves,
 its failure modes are limited to answering wrongly rather than storing wrongly, and
 it can be scaled or restarted without a thought about write consistency.
+
+## Why `pass_state` has a watermark and `person_view` does not
+
+`pass_state.last_event_at` guards every write: the upsert applies only when the
+incoming `edutap-occurred-at` is younger than the stored value, so a late event
+hits zero rows instead of overwriting a newer state. `person_view` has no such
+column, and that is a decision, not an oversight — it follows from what the two
+Kafka events actually carry.
+
+For `pass_state`, the event *is* the state: `pass.state` and `device.registration`
+messages carry the values the row is supposed to hold, so comparing their
+timestamps to decide which write should win is comparing the right thing.
+
+For `person_view`, the event is only a **trigger**: "fetch this person's current
+data." The row's freshness depends on when the producer read LDAP afterwards, not
+on when the Kafka message arrived — and a guard on the event time would measure
+the wrong moment:
+
+```text
+Trigger A (12:00)  ->  reads LDAP at 12:05  ->  data from 12:05
+Trigger B (12:01)  ->  reads LDAP at 12:02  ->  data from 12:02
+```
+
+If A writes after B, a guard keyed on the event time would reject exactly the
+write carrying the *newer* LDAP data, because event A is older than event B.
+`updated_at` does not help either: it is the write time, and the later write
+always has the later write time, so a guard on it would always be true and would
+protect against nothing.
+
+So `person_view` deliberately has no watermark: the last writer wins. Because a
+producer's usual sequence is trigger, then read LDAP, then write, the later
+writer is almost always also the later reader, and the pathological ordering
+above is rare and self-healing — the next trigger corrects it. The cost is a
+short window with a slightly stale LDAP snapshot, bounded by the next trigger.
+That is an accepted trade-off, not a gap the table happens to have.
 
 ## Why the API is mandatory and the SQL profile is optional
 

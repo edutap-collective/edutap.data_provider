@@ -117,13 +117,13 @@ print('configuration is valid')
 ## Let a SQL consumer read the tables directly
 
 An implementation whose consumers sit in the same database may let them read
-`person_view` and `pass_state` directly. This is the optional half of the contract;
-the HTTP API is the mandatory half.
+`person_view`, `pass_state` and `pass_instance` directly. This is the optional half
+of the contract; the HTTP API is the mandatory half.
 
 Grant read access and nothing else:
 
 ```sql
-GRANT SELECT ON person_view, pass_state TO heidi_reader;
+GRANT SELECT ON person_view, pass_state, pass_instance TO heidi_reader;
 ```
 
 What such a consumer gets is **raw rows**:

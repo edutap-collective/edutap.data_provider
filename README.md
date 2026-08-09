@@ -20,9 +20,9 @@ reference implementation.
 | GET | `/healthz` | liveness, without authentication |
 
 **SQL profile — optional.** An implementation whose consumers sit in the same
-database may let them read `person_view` and `pass_state` directly. Those tables
-deliver raw rows: no projection, no derivation. A direct reader brings its own
-post-processing — HEIDI Local's `field_map` is exactly that.
+database may let them read `person_view`, `pass_state` and `pass_instance`
+directly. Those tables deliver raw rows: no projection, no derivation. A direct
+reader brings its own post-processing — HEIDI Local's `field_map` is exactly that.
 
 ## How it works
 
@@ -41,7 +41,10 @@ post-processing — HEIDI Local's `field_map` is exactly that.
 * **Read-only, without exception.** The service issues `SELECT` and nothing else.
   `edutap.db_definitions` applies the schema with a privileged database user, and a
   deployment-specific producer fills `person_view` — at LMU the VZD webhook, from
-  directory events, while the worker writes `pass_state` from Kafka events.
+  directory events. `pass_state` and `pass_instance` are filled by one process, the
+  pass-state consumer, which writes both in the same transaction from Kafka events
+  — the reason the stored `holder_state` never drifts from the instances it
+  summarises.
 
 ## Install and run
 
