@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field
 
-from ..vocabulary import PassLifecycleState, WalletType
+from ..vocabulary import WalletType
 from .base import Base
 
 
@@ -78,9 +78,13 @@ class PassState(Base, table=True):
             "Text column, not a native enum — a new wallet provider must not force a migration."
         ),
     )
-    state: PassLifecycleState = Field(
+    state: str = Field(
         sa_column=sa.Column(sa.String(32), nullable=False),
-        description="Stored and delivered, never validated here.",
+        description=(
+            "Stored and delivered, never validated here. Provisionally typed as a plain "
+            "string: the two-axis state model (issuance_state, holder_state) that "
+            "replaces this column is task 3 of the schema-split plan, not this one."
+        ),
     )
     pass_template: str = Field(
         sa_column=sa.Column(sa.String(64), nullable=False),

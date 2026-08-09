@@ -373,7 +373,7 @@ mapping rules against these when a template version is published.
 
 ## Vocabulary
 
-Two enumerations. A consumer may either copy their values or import them, and which
+Four enumerations. A consumer may either copy their values or import them, and which
 of the two is right follows from whether it already depends on this package:
 
 * A consumer that must **not** depend on the data provider — `edutap.pass_builder`,
@@ -383,16 +383,20 @@ of the two is right follows from whether it already depends on this package:
   root or from the submodule; both are part of the public API:
 
   ```python
-  from edutap.data_provider import PassLifecycleState, WalletType
+  from edutap.data_provider import IssuanceState, WalletType
   ```
 
 `WalletType`: `GOOGLE_ST`, `GOOGLE_ACCESS`, `APPLE_VAS`, `APPLE_ACCESS`,
 `APPLE_IDENTITY`, `SAMSUNG_ST`, `SAMSUNG_ACCESS`.
 
-`PassLifecycleState`: `NEW`, `INSTALL_PENDING`, `UPDATE_PENDING`, `DELETE_PENDING`,
-`ACTIVE`, `INACTIVE`.
+* **`IssuanceState`** — what the issuer has done or wants, entirely under its own
+  control: `CREATED`, `ISSUED`, `REVOKED`, `EXPIRED`, `COMPLETED`, `FAILED`.
+* **`HolderState`** — whether the pass is present at the holder, **derived** from
+  `pass_instance` and never set: `NOT_PRESENT`, `PRESENT`, `SUSPENDED`.
+* **`InstanceState`** — one exemplar at the holder: `PROVISIONING`, `ACTIVE`,
+  `SUSPENDED`, `REMOVED_BY_HOLDER`, `REMOVED_BY_ISSUER`, `FAILED`.
 
-Both are stored in text columns rather than native enums, so a new wallet provider
+All are stored in text columns rather than native enums, so a new wallet provider
 does not force a migration in every installation. The price is that the database does
 not enforce the values.
 
@@ -461,5 +465,5 @@ The HTTP API does not expose `pass_state`. It is read through the
 |---|---|
 | `edutap.data_provider.api.app:create_app` | the FastAPI application factory; run it with `uvicorn … --factory` |
 | `edutap.data_provider.models.dbdef:definition` | the `SchemaDefinition` announced to `edutap.db_definitions` |
-| `edutap.data_provider` | the package root re-exports `WalletType`, `PassLifecycleState`, `FieldKind` and `__version__` |
-| `edutap.data_provider.vocabulary` | where those three enumerations are defined |
+| `edutap.data_provider` | the package root re-exports `WalletType`, `IssuanceState`, `HolderState`, `InstanceState`, `FieldKind` and `__version__` |
+| `edutap.data_provider.vocabulary` | where those five enumerations are defined |

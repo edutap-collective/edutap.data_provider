@@ -80,12 +80,13 @@ def test_every_wallet_type_is_documented():
         assert f"`{wallet_type.value}`" in vocabulary, f"{wallet_type.value} undocumented"
 
 
-def test_every_pass_lifecycle_state_is_documented():
-    from edutap.data_provider.vocabulary import PassLifecycleState
+def test_every_state_vocabulary_is_documented():
+    from edutap.data_provider.vocabulary import HolderState, InstanceState, IssuanceState
 
     vocabulary = section_of((DOCS / "reference.md").read_text(), "Vocabulary")
-    for state in PassLifecycleState:
-        assert f"`{state.value}`" in vocabulary, f"{state.value} undocumented"
+    for enumeration in (IssuanceState, HolderState, InstanceState):
+        for state in enumeration:
+            assert f"`{state.value}`" in vocabulary, f"{state.value} undocumented"
 
 
 def test_every_table_column_is_documented():
