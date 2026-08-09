@@ -402,9 +402,8 @@ not enforce the values.
 
 ## Database tables
 
-The package owns two tables today and reads both — a third, `pass_instance`, is on
-the way. It never creates them: the DDL is
-rendered and applied by `edutap.db_definitions`, which this package announces its
+The package owns three tables and reads all of them. It never creates them: the DDL
+is rendered and applied by `edutap.db_definitions`, which this package announces its
 metadata to through the `edutap.db_definitions` entry point. Constraint and index
 names follow the shared naming convention, and the Alembic version table is
 `alembic_version_data_provider`.
@@ -468,6 +467,32 @@ Indexes: `ix_pass_state_person_uid` on `person_uid`, and
 — the question the readers actually ask, *which passes does this person have?*
 
 The HTTP API does not expose `pass_state`. It is read through the
+[SQL profile](how-to.md#let-a-sql-consumer-read-the-tables-directly).
+
+### `pass_instance`
+
+One exemplar of a pass at the holder — zero to n rows per `pass_state` row. What an
+exemplar is depends on the platform: a device registration or a provisioned
+credential at Apple, the save into the account at Google. That platform-dependence is
+exactly why this state cannot live on `pass_state` itself.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `pass_id` | `VARCHAR(255)`, primary key part | foreign key to `pass_state.pass_id`, `ON DELETE CASCADE` |
+| `instance_ref` | `VARCHAR(255)`, primary key part | the identity under which the platform tracks this exemplar: the `deviceLibraryIdentifier` at Apple VAS, the provisioned credential at Apple Access, the fixed literal `account` at Google — there is exactly one exemplar per pass and no identifier is given, and the literal keeps the key usable and the upsert idempotent instead of faking one. Open for Samsung and EUDI |
+| `instance_state` | `VARCHAR(32)`, not null | an `InstanceState` value |
+| `synced_version` | `INTEGER`, nullable | which `pass_state.version` this exemplar provably holds; `null` before anything is known about it |
+| `provider_raw` | `JSONB`, nullable | what the platform delivered, verbatim |
+| `last_event_at` | `TIMESTAMPTZ`, not null | watermark, same rule as on `pass_state` |
+| `created_at` | `TIMESTAMPTZ`, not null | first seen |
+| `updated_at` | `TIMESTAMPTZ`, not null | last changed |
+
+There is no separate device column: `instance_ref` already carries the platform's
+identity for the exemplar, and a second column would hold the same string at Apple
+VAS and nothing at Google. Device detail, if ever needed, is in `provider_raw` as the
+platform delivered it.
+
+The HTTP API does not expose `pass_instance`. It is read through the
 [SQL profile](how-to.md#let-a-sql-consumer-read-the-tables-directly).
 
 ## Python entry points

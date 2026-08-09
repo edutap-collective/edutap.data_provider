@@ -1,4 +1,4 @@
-"""The two tables the data provider owns."""
+"""The three tables the data provider owns."""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field
 
-from ..vocabulary import HolderState, IssuanceState, WalletType
+from ..vocabulary import HolderState, InstanceState, IssuanceState, WalletType
 from .base import Base
 
 
@@ -142,6 +142,60 @@ class PassState(Base, table=True):
             "Watermark from the edutap-occurred-at header. The upsert writes only when "
             "this is younger than the stored value, so a late event hits zero rows."
         ),
+    )
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp())
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp(on_update=True))
+
+
+class PassInstance(Base, table=True):
+    """One exemplar of a pass at the holder — zero to n per pass.
+
+    What an exemplar is, the platform decides: a device registration or a
+    provisioned credential at Apple, the save into the account at Google. That is
+    why pass_state cannot carry device-oriented semantics — at Google there would
+    be nothing to put in it, at Apple several rows for one column.
+    """
+
+    __tablename__ = "pass_instance"
+    __table_args__ = ({"schema": "public"},)
+
+    pass_id: str = Field(
+        sa_column=sa.Column(
+            sa.String(255),
+            sa.ForeignKey("public.pass_state.pass_id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+    )
+    instance_ref: str = Field(
+        sa_column=sa.Column(sa.String(255), primary_key=True),
+        description=(
+            "The identity under which the platform tracks this exemplar. Apple VAS: "
+            "deviceLibraryIdentifier. Apple Access: the provisioned credential. "
+            "Google: the fixed literal 'account' — there is exactly one exemplar per "
+            "pass and no identifier is given, and a literal keeps the key usable and "
+            "the upsert idempotent instead of faking one."
+        ),
+    )
+    instance_state: InstanceState = Field(
+        sa_column=sa.Column(sa.String(32), nullable=False),
+        description="Text column, not a native enum — same reason as wallet_type.",
+    )
+    synced_version: int | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.Integer, nullable=True),
+        description=(
+            "Which PassState.version this exemplar provably holds. 'Update complete' "
+            "means min(synced_version) over the ACTIVE instances equals the pass version."
+        ),
+    )
+    provider_raw: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=sa.Column(JSONB, nullable=True),
+        description="What the platform delivered, verbatim.",
+    )
+    last_event_at: datetime = Field(
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+        description="Watermark, same rule as on PassState.",
     )
     created_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp())
     updated_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp(on_update=True))

@@ -10,11 +10,10 @@ from edutap.data_provider.models.db import PassState, PersonView
 def test_tables_live_on_the_package_metadata_only():
     from sqlmodel import SQLModel
 
-    # `pass_instance` joins this set in task 4 of the schema-split plan; until then
-    # its absence is the correct, current state, not a gap to "complete".
     assert set(metadata.tables) == {
         "public.person_view",
         "public.pass_state",
+        "public.pass_instance",
     }
     assert "public.person_view" not in SQLModel.metadata.tables
 
@@ -27,9 +26,7 @@ def test_contract_tables_declare_the_public_schema_explicitly():
     two deployments of one package with different layouts. Declaring the schema
     removes the ambiguity.
     """
-    # `pass_instance` joins this tuple in task 4 of the schema-split plan; until
-    # then its absence is the correct, current state, not a gap to "complete".
-    for name in ("person_view", "pass_state"):
+    for name in ("person_view", "pass_state", "pass_instance"):
         assert metadata.tables[f"public.{name}"].schema == "public"
 
 
@@ -129,6 +126,41 @@ def test_variant_is_optional_because_a_default_exists():
     assert metadata.tables["public.pass_state"].columns["pass_template_variant"].nullable
 
 
+def test_pass_instance_is_keyed_by_pass_and_platform_reference():
+    """instance_ref is what the platform calls this exemplar.
+
+    Apple VAS: the deviceLibraryIdentifier — the device IS the exemplar. Apple
+    Access: the provisioned credential. Google: the fixed literal 'account',
+    because there is exactly one exemplar per pass and no identifier is given.
+    """
+    table = metadata.tables["public.pass_instance"]
+    assert [column.name for column in table.primary_key.columns] == ["pass_id", "instance_ref"]
+
+
+def test_pass_instance_cascades_from_the_pass():
+    table = metadata.tables["public.pass_instance"]
+    foreign_key = next(iter(table.columns["pass_id"].foreign_keys))
+    assert foreign_key.column.table.fullname == "public.pass_state"
+    assert foreign_key.ondelete == "CASCADE"
+
+
+def test_pass_instance_records_which_version_it_provably_holds():
+    """Nullable: an instance can exist before anything is known about its version."""
+    column = metadata.tables["public.pass_instance"].columns["synced_version"]
+    assert isinstance(column.type, sa.Integer)
+    assert column.nullable
+
+
+def test_pass_instance_has_no_separate_device_column():
+    """instance_ref already carries the platform's identity for the exemplar.
+
+    A second device column would hold the same string at Apple VAS and none at
+    Google — two columns for one statement. Device detail, if ever needed, is in
+    provider_raw as the platform delivered it.
+    """
+    assert "device_ref" not in metadata.tables["public.pass_instance"].columns
+
+
 def test_models_are_usable_as_python_objects():
     view = PersonView(person_uid="x@lmu.de", view_type="full_view", data={"surname": "Doe"})
     assert view.data["surname"] == "Doe"
@@ -153,7 +185,11 @@ def test_schema_definition_announces_this_package():
     assert definition.name == "edutap.data_provider"
     assert definition.metadata is metadata
     assert definition.version_table == "alembic_version_data_provider"
-    assert sorted(definition.table_names) == ["public.pass_state", "public.person_view"]
+    assert sorted(definition.table_names) == [
+        "public.pass_instance",
+        "public.pass_state",
+        "public.person_view",
+    ]
 
 
 def test_entry_point_resolves_to_the_definition():

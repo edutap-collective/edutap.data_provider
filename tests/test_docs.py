@@ -90,10 +90,10 @@ def test_every_state_vocabulary_is_documented():
 
 
 def test_every_table_column_is_documented():
-    from edutap.data_provider.models.db import PassState, PersonView
+    from edutap.data_provider.models.db import PassInstance, PassState, PersonView
 
     reference = (DOCS / "reference.md").read_text()
-    for model in (PersonView, PassState):
+    for model in (PersonView, PassState, PassInstance):
         assert f"`{model.__tablename__}`" in reference
         # The table's own section, not the whole page: `person_uid` is a column of
         # both tables, so a page-wide search would accept one table's column list
