@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field
 
-from ..vocabulary import WalletType
+from ..vocabulary import HolderState, IssuanceState, WalletType
 from .base import Base
 
 
@@ -65,16 +65,24 @@ class PersonView(Base, table=True):
 
 
 class PassState(Base, table=True):
-    """One issued pass and where it stands in its life."""
+    """One issued pass and where it stands in its life.
+
+    Two axes, deliberately: `issuance_state` is what the issuer did or wants and
+    exists even with no instance at all — a pass issued and never installed is
+    ISSUED. `holder_state` is the summary of the instances. Only the pass-state
+    consumer writes this table, together with `pass_instance` in one transaction,
+    which is what keeps the stored `holder_state` from drifting.
+    """
 
     __tablename__ = "pass_state"
     __table_args__ = (
         sa.Index("ix_pass_state_person_uid", "person_uid"),
         sa.Index(
-            "ix_pass_state_person_template_wallet", "person_uid", "pass_template", "wallet_type"
+            "ix_pass_state_person_template_wallet",
+            "person_uid",
+            "pass_template",
+            "wallet_type",
         ),
-        # Declared, not inherited: `search_path` would otherwise decide, and it
-        # resolves differently per deployment (see tests).
         {"schema": "public"},
     )
 
@@ -95,12 +103,23 @@ class PassState(Base, table=True):
             "Text column, not a native enum — a new wallet provider must not force a migration."
         ),
     )
-    state: str = Field(
+    issuance_state: IssuanceState = Field(
+        sa_column=sa.Column(sa.String(32), nullable=False),
+        description="What the issuer did or wants. Stored and delivered, never validated here.",
+    )
+    holder_state: HolderState = Field(
         sa_column=sa.Column(sa.String(32), nullable=False),
         description=(
-            "Stored and delivered, never validated here. Provisionally typed as a plain "
-            "string: the two-axis state model (issuance_state, holder_state) that "
-            "replaces this column is task 3 of the schema-split plan, not this one."
+            "Derived from pass_instance, never set by a caller: PRESENT when at least "
+            "one instance is ACTIVE, SUSPENDED when instances exist but none is active "
+            "and one is suspended, NOT_PRESENT otherwise."
+        ),
+    )
+    version: int = Field(
+        default=0,
+        sa_column=sa.Column(sa.Integer, nullable=False, server_default="0"),
+        description=(
+            "Rises on every change of content. Compared against PassInstance.synced_version."
         ),
     )
     pass_template: str = Field(
@@ -111,6 +130,18 @@ class PassState(Base, table=True):
         default=None,
         sa_column=sa.Column(sa.String(64), nullable=True),
         description="Variant key; empty means the default variant, modelled as is_default there.",
+    )
+    provider_raw: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=sa.Column(JSONB, nullable=True),
+        description="What the provider actually said, kept so a later dispute can be settled.",
+    )
+    last_event_at: datetime = Field(
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+        description=(
+            "Watermark from the edutap-occurred-at header. The upsert writes only when "
+            "this is younger than the stored value, so a late event hits zero rows."
+        ),
     )
     created_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp())
     updated_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp(on_update=True))

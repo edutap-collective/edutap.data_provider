@@ -453,9 +453,13 @@ not per combination.
 | `pass_id` | `VARCHAR(255)`, primary key | the provider's pass identifier. Not a UUID column: usually a UUID, but Google Wallet object identifiers carry a prefix and suffix |
 | `person_uid` | `VARCHAR(64) COLLATE "C"`, not null | as above. **No foreign key**: a pass exists whether or not a view row currently does |
 | `wallet_type` | `VARCHAR(32)`, not null | a `WalletType` value |
-| `state` | `VARCHAR(32)`, not null | a `PassLifecycleState` value. Stored and delivered, never validated here |
+| `issuance_state` | `VARCHAR(32)`, not null | an `IssuanceState` value: what the issuer did or wants. Stored and delivered, never validated here |
+| `holder_state` | `VARCHAR(32)`, not null | a `HolderState` value. Derived, but stored — maintained by the pass-state consumer in the same transaction as `pass_instance`, which is exactly why the stored value cannot drift from the instances it summarises |
+| `version` | `INTEGER`, not null, default `0` | rises on every change of content; compared against `PassInstance.synced_version` |
 | `pass_template` | `VARCHAR(64)`, not null | speaking template key, matching `Template.key` in `edutap.pass_builder` |
 | `pass_template_variant` | `VARCHAR(64)`, nullable | variant key; empty means the default variant, which `pass_builder` models as `is_default` |
+| `provider_raw` | `JSONB`, nullable | what the provider actually said, kept so a later dispute can be settled |
+| `last_event_at` | `TIMESTAMPTZ`, not null | the watermark: the upsert writes only when `edutap-occurred-at` is younger than this value, so a late event hits zero rows instead of overwriting a newer state |
 | `created_at` | `TIMESTAMPTZ`, not null | issued at |
 | `updated_at` | `TIMESTAMPTZ`, not null | last changed |
 

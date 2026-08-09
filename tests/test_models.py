@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -64,14 +66,50 @@ def test_person_view_indexes_view_type_for_whole_view_reads():
 
 
 def test_pass_state_identifier_is_a_string_not_a_uuid():
+    """Usually a UUID, but Google object identifiers carry a prefix and suffix."""
     column = metadata.tables["public.pass_state"].columns["pass_id"]
     assert isinstance(column.type, sa.String)
     assert column.type.length == 255
     assert column.primary_key
 
 
-def test_pass_state_has_no_foreign_key_to_the_person():
-    assert metadata.tables["public.pass_state"].foreign_keys == set()
+def test_pass_state_separates_issuance_from_holder():
+    table = metadata.tables["public.pass_state"]
+    assert "issuance_state" in table.columns
+    assert "holder_state" in table.columns
+    assert "state" not in table.columns
+
+
+def test_pass_state_counts_a_version():
+    """The counter the instances are compared against via synced_version."""
+    column = metadata.tables["public.pass_state"].columns["version"]
+    assert isinstance(column.type, sa.Integer)
+    assert not column.nullable
+
+
+def test_pass_state_carries_the_watermark():
+    """The event carries the state here, so the event time is the right measure.
+
+    The upsert writes only when edutap-occurred-at is younger than last_event_at;
+    a late event then hits zero rows instead of overwriting a newer state.
+    """
+    column = metadata.tables["public.pass_state"].columns["last_event_at"]
+    assert isinstance(column.type, sa.DateTime)
+    assert column.type.timezone
+    assert not column.nullable
+
+
+def test_pass_state_keeps_the_provider_native_value():
+    """If Google later claims something else, this is the only way to settle it."""
+    column = metadata.tables["public.pass_state"].columns["provider_raw"]
+    assert isinstance(column.type, JSONB)
+    assert column.nullable
+
+
+def test_pass_state_does_not_reference_the_person_view():
+    """No foreign key: a pass exists whether or not a view row currently does."""
+    table = metadata.tables["public.pass_state"]
+    assert table.foreign_keys == set()
 
 
 def test_pass_state_indexes_the_question_readers_ask():
@@ -82,7 +120,7 @@ def test_pass_state_indexes_the_question_readers_ask():
 
 def test_vocabulary_columns_are_text_not_native_enums():
     table = metadata.tables["public.pass_state"]
-    for name in ("wallet_type", "state"):
+    for name in ("wallet_type", "issuance_state", "holder_state"):
         assert isinstance(table.columns[name].type, sa.String)
         assert not isinstance(table.columns[name].type, sa.Enum)
 
@@ -98,8 +136,10 @@ def test_models_are_usable_as_python_objects():
         pass_id="3388000000022195611.abc",
         person_uid="x@lmu.de",
         wallet_type="GOOGLE_ST",
-        state="ACTIVE",
+        issuance_state="ISSUED",
+        holder_state="NOT_PRESENT",
         pass_template="mensapass",
+        last_event_at=datetime.now(UTC),
     )
     assert state.pass_template_variant is None
 
@@ -137,8 +177,6 @@ def test_the_python_side_default_is_timezone_aware():
     against the server's time zone -- an `updated_at` silently wrong by the offset of
     whichever machine happened to write the row, and wrong differently per machine.
     """
-    from datetime import UTC
-
     from edutap.data_provider.models.db import _utcnow
 
     now = _utcnow()
