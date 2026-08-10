@@ -420,7 +420,7 @@ of the contract — what is in `public` is interface, deliberately, not merely
 whatever happened to land there.
 
 ```console
-$ edutap-dbdef create --packages edutap.data_provider --out schema.sql
+$ edutap-dbdef create --packages edutap.db_definitions.public --out schema.sql
 ```
 
 ### `person_view`

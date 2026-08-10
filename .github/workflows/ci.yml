@@ -3,9 +3,10 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Nothing in this repository is locked: uv.lock is git-ignored, every requirement
-  # is a lower bound, and edutap.db_definitions is a direct reference to a moving
-  # branch. A suite that passed on the last commit can therefore fail a week later
+  # Nothing in this repository is locked: uv.lock is git-ignored and every
+  # requirement is a lower bound. The two eduTAP direct references are pinned to tags
+  # and no longer drift -- everything from a public index still does, so the reason
+  # for this run stands. A suite that passed on the last commit can therefore fail
   # with nothing changed here. Weekly, Monday morning UTC, on main only — the run
   # that turns "some dependency broke us" from a discovery during the next piece of
   # work into a mail on a Monday.
@@ -16,9 +17,10 @@ on:
 # until now and why CI had never once been green: the runner's system interpreter is
 # Debian's, marked EXTERNALLY-MANAGED, so uv refuses it outright — and for the matrix
 # entries the runner has no system interpreter at all ("No system Python installation
-# found for Python 3.14"). Not `uv run` either, for the reason the Makefile gives:
-# this package declares an entry point group that uv resolves against the whole
-# environment, and a bare `uv run` can fail where sibling eduTAP packages are absent.
+# found for Python 3.14"). Not `uv run` either, for the reason the Makefile gives: a
+# bare `uv run` locks the whole project, and the two eduTAP requirements are direct
+# references that resolve against git rather than an index, which fails wherever the
+# network or the credentials for it are absent.
 jobs:
   test:
     runs-on: ubuntu-latest

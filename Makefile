@@ -1,6 +1,8 @@
-# Tools run from .venv, not through `uv run`: this package declares an entry point
-# group that uv resolves against the whole environment, and a bare `uv run` can fail
-# in a checkout where sibling eduTAP packages are not installed.
+# Tools run from .venv, not through `uv run`: a bare `uv run` locks the whole project,
+# and the two eduTAP requirements are direct references that resolve against git rather
+# than an index -- which fails wherever the network or the credentials for it are
+# absent. The entry point group this comment used to name is gone: the package
+# announces no schema any more.
 PYTHON := .venv/bin/python
 VENV   := .venv
 
