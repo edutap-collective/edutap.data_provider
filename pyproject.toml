@@ -7,11 +7,21 @@ name = "edutap.data_provider"
 version = "0.1.0"
 description = "Read-only service delivering person views and pass states for eduTAP"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 license = "EUPL-1.2"
 authors = [{ name = "eduTAP" }]
 dependencies = [
     "asyncpg>=0.29",
+    # PEP 508 direct references: public but not published to a public index, pinned
+    # to tags rather than to a branch. db_definitions moved from the dev extra to
+    # here, because the tables this service reads are declared there and imported at
+    # runtime. Its core install is deliberately light -- no alembic, no driver -- so
+    # the container carries declarations and nothing else. data_models is named even
+    # though db_definitions already pulls it in: `vocabulary` imports it directly,
+    # and a dependency one relies on but does not declare disappears the moment the
+    # package in between drops it.
+    "edutap.data_models @ git+https://github.com/edutap-collective/edutap.data_models@v0.1.0",
+    "edutap.db_definitions @ git+https://github.com/edutap-collective/edutap.db_definitions@v0.1.0",
     "fastapi>=0.115",
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
@@ -26,19 +36,17 @@ dependencies = [
     # not cosmetic: `logfire.instrument_fastapi()` raises at runtime without
     # `opentelemetry-instrumentation-fastapi`, which only that extra pulls in.
     "logfire[fastapi]>=4.39",
-    "sqlalchemy>=2.0",
-    "sqlmodel>=0.0.22",
+    # [asyncio] rather than bare sqlalchemy: the async engine needs greenlet, and
+    # SQLAlchemy leaves it to that extra. It was installed here only by accident --
+    # sqlmodel dragged it in -- and dropping sqlmodel from the runtime dependencies
+    # made the integration tests fail with "the greenlet library is required".
+    # An accidental dependency is not a declared one.
+    "sqlalchemy[asyncio]>=2.0",
     "uvicorn[standard]>=0.30",
 ]
 
 [project.optional-dependencies]
 dev = [
-    # PEP 508 direct reference, not a bare name: edutap.db_definitions is public
-    # but not published to PyPI. A direct reference resolves the same way whether
-    # this extra is installed alone (`make venv`, a fresh clone) or after the
-    # package itself, so there is no required install ordering — unlike a
-    # separate `pip install` step run before `-e ".[dev]"` in CI.
-    "edutap.db_definitions @ git+https://github.com/edutap-collective/edutap.db_definitions@main",
     # Never imported by this package. `fastapi.testclient` needs an HTTP client, and
     # starlette 1.3 takes `httpx2` in preference to `httpx`, warning whenever it has
     # to fall back to the latter. Listing it here is what keeps that fallback — and
@@ -58,17 +66,13 @@ dev = [
 ]
 docs = ["myst-parser", "sphinx>=8"]
 
-[project.entry-points."edutap.db_definitions"]
-schema = "edutap.data_provider.models.dbdef:definition"
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/edutap"]
 
 [tool.hatch.metadata]
-# Required by hatchling for the `edutap.db_definitions` direct reference (a git URL,
-# not a PyPI name) in the `dev` extra above. This package is never published to
-# PyPI itself, so the restriction direct references normally exist to enforce there
-# does not apply.
+# Required by hatchling for the two direct references (git URLs, not PyPI names) in
+# the runtime dependencies above. This package is never published to PyPI itself, so
+# the restriction direct references normally exist to enforce there does not apply.
 allow-direct-references = true
 
 [tool.pytest.ini_options]

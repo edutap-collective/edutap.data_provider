@@ -402,11 +402,15 @@ not enforce the values.
 
 ## Database tables
 
-The package owns three tables and reads all of them. It never creates them: the DDL
-is rendered and applied by `edutap.db_definitions`, which this package announces its
-metadata to through the `edutap.db_definitions` entry point. Constraint and index
-names follow the shared naming convention, and the Alembic version table is
-`alembic_version_data_provider`.
+The package reads three tables and owns none of them. They are declared by
+`edutap.db_definitions`, which also renders and applies their DDL; this package
+imports the classes from `edutap.db_definitions.public.tables` and announces no
+schema of its own. Constraint and index names follow the shared naming convention,
+and the Alembic version table is `alembic_version_public`.
+
+They moved because a reader declaring what other services write had the ownership
+backwards: `person_view` is filled by a person spooler, `pass_state` and
+`pass_instance` by the pass-state consumer.
 
 All three live in the schema `public`, declared explicitly on each table rather than
 inherited from `search_path`. In this deployment `public` is not a default dumping
@@ -507,6 +511,5 @@ The HTTP API does not expose `pass_instance`. It is read through the
 | Object | Purpose |
 |---|---|
 | `edutap.data_provider.api.app:create_app` | the FastAPI application factory; run it with `uvicorn … --factory` |
-| `edutap.data_provider.models.dbdef:definition` | the `SchemaDefinition` announced to `edutap.db_definitions` |
 | `edutap.data_provider` | the package root re-exports `WalletType`, `IssuanceState`, `HolderState`, `InstanceState`, `FieldKind` and `__version__` |
-| `edutap.data_provider.vocabulary` | where those five enumerations are defined |
+| `edutap.data_provider.vocabulary` | this package's façade; the five enumerations are defined in `edutap.data_models` |

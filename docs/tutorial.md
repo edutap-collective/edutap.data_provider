@@ -30,10 +30,11 @@ continuing — the rest of this tutorial talks to the container through
 ## 3. Render and apply the schema
 
 The service never creates a table. The schema comes from `edutap.db_definitions`,
-which reads the table definitions this package announces through an entry point:
+which declares these three tables itself -- they are the contract schema, written by
+other services and read by this one:
 
 ```console
-$ .venv/bin/edutap-dbdef create --packages edutap.data_provider --out schema.sql
+$ .venv/bin/edutap-dbdef create --packages edutap.db_definitions.public --out schema.sql
 ```
 
 Look at `schema.sql`: it contains `person_view`, `pass_state` and `pass_instance`,

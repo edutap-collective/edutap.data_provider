@@ -90,7 +90,7 @@ def test_every_state_vocabulary_is_documented():
 
 
 def test_every_table_column_is_documented():
-    from edutap.data_provider.models.db import PassInstance, PassState, PersonView
+    from edutap.db_definitions.public.tables import PassInstance, PassState, PersonView
 
     reference = (DOCS / "reference.md").read_text()
     for model in (PersonView, PassState, PassInstance):
