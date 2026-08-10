@@ -5,7 +5,14 @@ FROM python:3.14-slim AS build
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+# git, because two runtime dependencies are PEP 508 direct references to a git
+# repository. No cleanup afterwards: this stage is discarded, only site-packages and
+# the console scripts are copied out of it, so nothing installed here reaches the
+# runtime image.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends git; \
+    pip install --no-cache-dir .
 
 FROM python:3.14-slim
 # The interpreter of the base image is 3.14, so this is where `pip install` put the

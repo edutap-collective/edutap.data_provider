@@ -111,11 +111,19 @@ def postgres_url():
 
 @pytest.fixture
 async def engine(postgres_url):
-    """An engine on a fresh schema with this package's tables created."""
-    from sqlalchemy.ext.asyncio import create_async_engine
+    """An engine on a fresh schema with the contract tables created.
 
-    from edutap.data_provider.models import db  # noqa: F401  registers the tables
-    from edutap.data_provider.models.base import metadata
+    They are not this package's: it reads them and never creates one. The fixture
+    creates and drops them here because a test database has to contain them before
+    the repository can be asked anything.
+    """
+    # The tables belong to edutap.db_definitions now; importing the module is still
+    # what registers them on the metadata this fixture creates and drops.
+    from edutap.db_definitions.public import (
+        metadata,
+        tables,  # noqa: F401  registers the tables
+    )
+    from sqlalchemy.ext.asyncio import create_async_engine
 
     engine = create_async_engine(postgres_url)
     async with engine.begin() as connection:

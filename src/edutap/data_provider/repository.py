@@ -12,10 +12,9 @@ would be dead code inviting an endpoint the contract does not have.
 
 from typing import Any
 
+from edutap.db_definitions.public.tables import PersonView
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
-
-from .models.db import PersonView
 
 
 class Repository:
@@ -27,7 +26,7 @@ class Repository:
 
     async def person_view(self, person_uid: str, view_type: str) -> dict[str, Any] | None:
         """Return the payload of one view, or None when the row does not exist."""
-        # ty (still pre-release, see models/dbdef.py for the same pattern) does not
+        # ty (still pre-release) does not
         # resolve a SQLModel field to a typed SQLAlchemy column here and picks the
         # single-argument select() overload instead of the catch-all one that matches.
         statement = select(PersonView.data).where(  # ty: ignore[no-matching-overload]

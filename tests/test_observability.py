@@ -187,11 +187,11 @@ def _database_error(person_uid: str, view_type: str):
     `[parameters: ('u123456', 'mensapass')]` into `StatementError.__str__` unless
     the engine was built with it.
     """
+    from edutap.db_definitions.public.tables import PersonView
     from sqlalchemy import select
     from sqlalchemy.exc import DBAPIError
 
     from edutap.data_provider.api.dependencies import get_repository
-    from edutap.data_provider.models.db import PersonView
 
     engine = get_repository()._session_factory.kw["bind"].sync_engine
     statement = select(PersonView.data).where(

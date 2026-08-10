@@ -6,8 +6,8 @@ catalogue per view type, projects a stored row onto exactly the fields a caller 
 for, and computes derived fields — such as a pass validity — at read time from a
 closed rule language. It is read-only without exception: it creates no table, writes
 no row, and judges no pass lifecycle transition. Producers outside the service fill
-the three tables it owns, and `edutap.db_definitions` applies their schema with a
-privileged database user.
+the three tables it reads, `edutap.db_definitions` declares them, and the same tool
+applies their schema with a privileged database user.
 
 ```{toctree}
 :maxdepth: 2

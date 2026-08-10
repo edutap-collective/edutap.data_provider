@@ -81,11 +81,12 @@ the survivors are rewritten error messages that nobody asserts on.
 ## Dependencies and CI
 
 Every requirement is a lower bound, `uv.lock` is not committed, and
-`edutap.db_definitions` is a direct reference to a moving branch — the installed set
-changes without anyone changing this repository. Renovate (the hosted app, configured
+the two `edutap.*` direct references are pinned to tags rather than to a branch, so
+a merge elsewhere no longer changes this package's build without a line changing
+here. Renovate (the hosted app, configured
 in `renovate.json5`) proposes updates weekly, grouped and never automerged, and CI
 runs on a weekly schedule as well, so drift shows up on a Monday instead of in the
-middle of the next piece of work. CI is the test matrix over Python 3.12 to 3.14, the
+middle of the next piece of work. CI is the test matrix over Python 3.13 and 3.14, the
 integration tests, ruff and ty, and a build of the container image.
 
 ## Consumers
