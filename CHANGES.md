@@ -2,6 +2,11 @@
 
 ## 0.1.0 (unreleased)
 
+- The image workflow publishes **date tags** (`YYYY-MM-DD_HHmm`), the house
+  convention for a service, instead of semver tags that were never cut. Until now
+  the registry held only `latest`, `main` and `sha-*`, so a deployment could pin
+  nothing but a digest.
+
 - Initial release: `GET /catalogue` and `POST /lookup` over configured views, with
   read-time derivation from a closed rule language.
 - Three tables — `person_view`, `pass_state` and `pass_instance` — announced to
