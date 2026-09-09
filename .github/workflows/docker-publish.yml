@@ -10,7 +10,16 @@ name: Publish container image
 on:
   push:
     branches: ["main"]
-    tags: ["v*.*.*"]
+    # Date versions, not semver: this is a SERVICE. The house convention splits
+    # on the kind of artefact -- a service is deployed and pinned by the date it
+    # was built, a library is depended upon and needs an ordered version.
+    #
+    # The trigger used to be `v*.*.*`, and no such tag was ever cut. The registry
+    # therefore held `latest`, `main` and `sha-*` and nothing a deployment could
+    # honestly pin: `latest@sha256:...` answers "which build is this?" with a
+    # lookup instead of a label. Measured on 2026-09-09 while pinning the
+    # reference deployment.
+    tags: ["20[0-9][0-9]-[0-1][0-9]-[0-3][0-9]_[0-2][0-9][0-5][0-9]"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:
@@ -55,12 +64,18 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # `latest` only ever points at main. Deployments that pin a version
-          # use the semver tags; the sha tag is the unambiguous fallback.
+          # use the date tag; the sha tag is the unambiguous fallback.
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            # `type=ref,event=tag` takes the tag name VERBATIM, which is what a
+            # date version needs. THE TRIGGER ABOVE IS NOT ENOUGH ON ITS OWN:
+            # with the `type=semver` rules that stood here, a tag like
+            # 2026-09-09_2030 would produce NOTHING -- and would do so silently.
+            # The run goes green and pushes only `sha-<...>`; the registry then
+            # answers `not found` to whoever tries to pin it. Three sibling
+            # repositories learned this the expensive way on 2026-08-30.
+            type=ref,event=tag
             type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
 
