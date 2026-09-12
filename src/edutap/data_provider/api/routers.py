@@ -12,7 +12,7 @@ from ..config import ProviderConfig
 from ..observability import get_observability_settings, pseudonym
 from ..repository import Repository
 from ..rules import RuleError, evaluate, parse_rule
-from ..validation import datetime_fields
+from ..validation import datetime_fields, rule_names
 from .auth import require_token
 from .dependencies import get_provider_config, get_repository
 from .errors import ProblemError
@@ -90,8 +90,42 @@ async def lookup(
     # Set only on a RuleError, and read after the loop: see the comment on the
     # `except` clause below for why the raise itself has to live out here.
     derivation_failure: str | None = None
+
+    # ROUND ONE, BEFORE THE LOOP. A payload rule may read a derived field, so the
+    # derived values have to exist before any payload is evaluated -- that is what
+    # makes `payloads` a second round rather than a chain.
+    #
+    # Only what is needed, not every derived field of the view: a rule that raises
+    # on this person's stored row would otherwise fail a request that never asked
+    # for it. "Needed" is the requested derived fields plus the derived names the
+    # requested payloads read.
+    needed = {key for key in request.fields if key in view.derived}
     for key in request.fields:
-        if entries[key].derived:
+        if key in view.payloads:
+            needed |= rule_names(parse_rule(view.payloads[key].rule)) & set(view.derived)
+
+    computed: dict[str, Any] = {}
+    for name in sorted(needed):
+        try:
+            computed[name] = evaluate(
+                parse_rule(view.derived[name].rule), payload, config.constants, dates
+            )
+        except RuleError:
+            # Per field, not around the whole round: the field name is what an
+            # operator gets INSTEAD of the traceback, and the long comment in the
+            # loop below explains why the RuleError itself must not be chained.
+            # A round-one failure that only said "some derived field" would take
+            # away the one thing that makes the record actionable.
+            derivation_failure = (
+                f"Rule for field {name!r} of view {request.view_type!r} failed on the "
+                "stored data for this person."
+            )
+            break
+
+    for key in request.fields if derivation_failure is None else []:
+        if key in view.derived:
+            value = computed[key]
+        elif entries[key].derived:
             # Not dead code, and not something startup validation makes redundant:
             # `validate_config` type-checks the rule's static AST, while this failure
             # mode lives in the row. A field declared DATETIME whose stored value is
@@ -101,7 +135,11 @@ async def lookup(
             # application/problem+json contract this API promises.
             try:
                 value = evaluate(
-                    parse_rule(view.derived[key].rule), payload, config.constants, dates
+                    parse_rule(view.payloads[key].rule),
+                    payload,
+                    config.constants,
+                    dates,
+                    computed=computed,
                 )
             except RuleError:
                 # `rules._as_date` puts the offending stored value verbatim in a

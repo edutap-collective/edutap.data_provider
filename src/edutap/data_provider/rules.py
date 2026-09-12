@@ -11,7 +11,7 @@ programming language grows inside a deployment YAML.
 
 import ast
 import datetime
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -73,7 +73,51 @@ FUNCTIONS: dict[str, Signature] = {
     "max": Signature("max", "any", 1, variadic=True),
     "first": Signature("first", "any", 1),
     "join": Signature("join", "string", 2),
+    # Variadic over SCALARS, unlike `join`, which takes a separator and a list.
+    # Building a payload means putting several values and their separators in one
+    # string, and a list literal is not part of this language -- `parse_rule`
+    # refuses one.
+    "concat": Signature("concat", "string", 1, variadic=True),
+    # Two arguments, and the second is a NAMED pattern rather than a strftime
+    # format. See `DATE_PATTERNS`.
+    "format_date": Signature("format_date", "string", 2, date_arguments=(0,)),
 }
+
+#: The patterns `format_date` accepts, and the whole set of them.
+#:
+#: An allowlist rather than free strftime, for two reasons. A free pattern in a
+#: configuration file is a typo that nothing catches until a pass carries it --
+#: and this language exists precisely so that a configuration cannot express a
+#: wrong pass. And `%` sequences travel badly: the same value may pass through a
+#: ConfigParser or a shell somewhere downstream, which is a class of surprise
+#: this project has already paid for.
+#:
+#: A name that is not here fails when the rule is PARSED, so at startup, not on
+#: the first request.
+DATE_PATTERNS: dict[str, str] = {
+    "YYYYMMDD": "%Y%m%d",
+    "YYYY-MM-DD": "%Y-%m-%d",
+}
+
+
+def _check_date_pattern(node: ast.Call, source: str) -> None:
+    """Refuse a `format_date` pattern that is not in the allowlist.
+
+    The pattern has to be a literal: a pattern computed from a field could not
+    be checked here, and "checked at startup" is the whole promise of this
+    module.
+    """
+    pattern = node.args[1]
+    if not isinstance(pattern, ast.Constant) or not isinstance(pattern.value, str):
+        raise RuleError(
+            f"format_date() needs a literal pattern in rule {source!r}; "
+            f"one of: {', '.join(sorted(DATE_PATTERNS))}."
+        )
+    if pattern.value not in DATE_PATTERNS:
+        raise RuleError(
+            f"format_date() does not know the pattern {pattern.value!r} in rule {source!r}. "
+            f"Known patterns: {', '.join(sorted(DATE_PATTERNS))}."
+        )
 
 
 def parse_rule(source: str) -> ast.Expression:
@@ -109,6 +153,8 @@ def parse_rule(source: str) -> ast.Expression:
                     f"{node.func.id!r} expects {signature.arity} argument(s), "
                     f"got {argument_count}, in rule {source!r}."
                 )
+            if node.func.id == "format_date":
+                _check_date_pattern(node, source)
             continue
         raise RuleError(
             f"{type(node).__name__} is not allowed in a rule. Rule {source!r} may only use "
@@ -149,9 +195,24 @@ def evaluate(
     constants: dict[str, Any],
     datetime_fields: set[str],
     today: datetime.date | None = None,
+    computed: Mapping[str, Any] | None = None,
 ) -> Any:
-    """Evaluate a parsed rule against one payload."""
+    """Evaluate a parsed rule against one payload.
+
+    `computed` carries the values of an earlier round -- the derived fields,
+    when a payload rule is being evaluated. It is empty for a derived rule,
+    which is what keeps the rounds apart: round one cannot see round two, and
+    neither round can see itself.
+
+    A name resolves as constant, then computed value, then payload key. A
+    computed value therefore SHADOWS a stored key of the same name. That is
+    deliberate: the view declares the computed field, the payload merely
+    happens to carry the key, and a reader looks at the view first.
+    `validate_config` refuses the collision anyway, so this only decides what
+    happens to a payload key the view never declared.
+    """
     reference_day = today or datetime.date.today()
+    resolved = computed or {}
 
     def resolve(node: ast.AST) -> Any:
         if isinstance(node, ast.Expression):
@@ -161,6 +222,11 @@ def evaluate(
         if isinstance(node, ast.Name):
             if node.id in constants:
                 return constants[node.id]
+            if node.id in resolved:
+                value = resolved[node.id]
+                # An earlier round may already have produced a real date; the
+                # coercion is idempotent and keeps a round-one string honest.
+                return _as_date(value) if node.id in datetime_fields else value
             value = payload.get(node.id)
             return _as_date(value) if node.id in datetime_fields else value
         if isinstance(node, ast.Call):
@@ -176,7 +242,9 @@ def evaluate(
             return resolve(then) if resolve(condition) else resolve(otherwise)
         if name == "exists":
             target = node.args[0]
-            return isinstance(target, ast.Name) and target.id in payload
+            if not isinstance(target, ast.Name):
+                return False
+            return target.id in payload or target.id in resolved
         arguments = [resolve(argument) for argument in node.args]
         return apply(name, arguments)
 
@@ -218,6 +286,18 @@ def evaluate(
             case "join":
                 separator, values = arguments[0], arguments[1] or []
                 return separator.join(str(value) for value in values)
+            case "concat":
+                # A missing value becomes the empty string, never the text
+                # "None". `str(None)` on a pass is the kind of defect that
+                # reads as a real value to everyone except the reader that
+                # rejects it.
+                return "".join("" if value is None else str(value) for value in arguments)
+            case "format_date":
+                value, pattern = _as_date(arguments[0]), arguments[1]
+                # A missing date stays missing rather than becoming "". The
+                # caller decides what an absent value means; `coalesce` is
+                # right there for a default.
+                return None if value is None else value.strftime(DATE_PATTERNS[pattern])
         raise RuleError(f"{name!r} has no implementation.")  # pragma: no cover
 
     return resolve(expression)

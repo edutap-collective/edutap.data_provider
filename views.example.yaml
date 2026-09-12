@@ -8,6 +8,9 @@ constants:
   # Another site may use a different sentinel — it is configuration, not a constant
   # of the package.
   open_ended: 9999-12-31
+  # A value that is the same for every person is a constant, not a field: a field
+  # would say a producer writes it per person, and nobody does.
+  home_organization: example.edu
 
 views:
   full_view:
@@ -34,3 +37,16 @@ views:
           min(add_days(today(), 7),
               coalesce(student_role_valid_until, open_ended),
               coalesce(employee_role_valid_until, open_ended))
+    # ROUND TWO. A payload rule may read a derived field; a derived rule may not.
+    # That is the whole difference between the two sections, and it is why an
+    # encoding for a terminal belongs here: it is assembled from values that
+    # themselves had to be computed.
+    payloads:
+      nfc_payload:
+        kinds: [STRING, NFC]
+        description: What a terminal reads over NFC
+        # `format_date` takes a NAMED pattern, not a strftime format, and an
+        # unknown name fails at startup rather than on a pass.
+        rule: >
+          concat(home_organization, ':',
+                 format_date(pass_valid_until, 'YYYYMMDD'))
