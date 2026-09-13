@@ -136,11 +136,32 @@ class DerivedSpec(BaseModel):
 
 
 class ViewSpec(BaseModel):
-    """One view type: what it exposes, stored and derived."""
+    """One view type: what it exposes, stored, derived and encoded.
+
+    THREE SECTIONS, AND THEY ARE TWO ROUNDS OF COMPUTATION.
+
+    `fields` are what a producer writes. `derived` is round one: rules over
+    stored fields and constants. `payloads` is round two: rules that may
+    additionally read what round one produced.
+
+    Round two exists because an encoding for a device -- an NFC message, a
+    barcode -- is not another fact about a person. It is a wire format, with
+    its own audience, its own length limits and its own kinds, and it is
+    normally assembled from values that themselves had to be computed: a
+    validity that is capped today, a role that was decided from an
+    affiliation.
+
+    Two rounds rather than a dependency graph, deliberately. A graph needs
+    cycle detection, an error class and a test that the error fires. Rounds
+    make a cycle UNREPRESENTABLE: neither round can read itself, and round one
+    cannot see round two. The layering is visible in the file instead of
+    implied by the order in which names happen to resolve.
+    """
 
     description: str | None = None
     fields: dict[str, FieldSpec] = {}
     derived: dict[str, DerivedSpec] = {}
+    payloads: dict[str, DerivedSpec] = {}
 
 
 class ProviderConfig(BaseModel):
@@ -194,13 +215,19 @@ def load_config(path: Path) -> ProviderConfig:
         raise ConfigError(f"Invalid view configuration: {error}") from error
 
     for name, view in config.views.items():
-        if not view.fields and not view.derived:
+        if not view.fields and not view.derived and not view.payloads:
             raise ConfigError(f"View {name!r} is empty: it exposes no fields.")
-        _check_flat_names(name, [*view.fields, *view.derived])
-        collisions = set(view.fields) & set(view.derived)
-        if collisions:
-            raise ConfigError(
-                f"View {name!r}: {', '.join(sorted(collisions))} is both a stored and a "
-                "derived field. A name means one thing."
-            )
+        _check_flat_names(name, [*view.fields, *view.derived, *view.payloads])
+        # Pairwise across all three sections, not just stored against derived:
+        # a name means one thing, and which section it came from must not be
+        # the tie-breaker.
+        sections = (("stored", view.fields), ("derived", view.derived), ("payload", view.payloads))
+        for index, (left_name, left) in enumerate(sections):
+            for right_name, right in sections[index + 1 :]:
+                collisions = set(left) & set(right)
+                if collisions:
+                    raise ConfigError(
+                        f"View {name!r}: {', '.join(sorted(collisions))} is both a "
+                        f"{left_name} and a {right_name} field. A name means one thing."
+                    )
     return config

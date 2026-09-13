@@ -36,8 +36,14 @@ def catalogue_for(config: ProviderConfig, view_type: str) -> list[CatalogueEntry
         CatalogueEntry(key=key, kinds=spec.kinds, derived=False, description=spec.description)
         for key, spec in view.fields.items()
     ]
+    # Both computed rounds, and both flagged `derived=True`. The rounds are a
+    # property of HOW a value is produced, not of what a consumer may bind it
+    # to -- a catalogue that distinguished them would leak an implementation
+    # detail into the contract, and every consumer would have to learn a
+    # distinction it cannot act on.
     entries += [
         CatalogueEntry(key=key, kinds=spec.kinds, derived=True, description=spec.description)
-        for key, spec in view.derived.items()
+        for section in (view.derived, view.payloads)
+        for key, spec in section.items()
     ]
     return sorted(entries, key=lambda entry: entry.key)

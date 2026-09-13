@@ -234,6 +234,13 @@ views:
         kinds: [STRING, TEXT, DATETIME]
         description: At most seven days ahead
         rule: min(add_days(today(), 7), coalesce(student_role_valid_until, open_ended))
+    payloads:
+      nfc_payload:
+        kinds: [STRING, NFC]
+        description: What the terminal reads
+        rule: >
+          concat('stwm.de:', dns, ':', stwm_role, ':',
+                 format_date(pass_valid_until, 'YYYYMMDD'))
 ```
 
 | Key | Type | Meaning |
@@ -242,7 +249,33 @@ views:
 | `views` | mapping | one entry per view type; the key is the `view_type` of the API and of the `person_view` row |
 | `views.<name>.description` | string | optional, free text |
 | `views.<name>.fields` | mapping | fields a producer writes and the catalogue exposes |
-| `views.<name>.derived` | mapping | fields computed at read time |
+| `views.<name>.derived` | mapping | fields computed at read time, round one |
+| `views.<name>.payloads` | mapping | fields computed at read time, round two — these may read round one |
+
+### Two rounds, not a graph
+
+`derived` and `payloads` are the same shape and differ in one thing: what their
+rules may read.
+
+| | reads stored fields and constants | reads `derived` | reads `payloads` |
+|---|---|---|---|
+| `derived` | yes | **no** | no |
+| `payloads` | yes | **yes** | no |
+
+`payloads` exists because an encoding for a device — an NFC message, a barcode — is
+not another fact about a person. It is a wire format, with its own audience, its own
+length limit and its own kinds, and it is normally assembled from values that
+themselves had to be computed.
+
+Two rounds rather than a dependency graph, deliberately: a graph needs cycle
+detection, an error class and a test that the error fires. Rounds make a cycle
+**unrepresentable** — neither round can read itself — and the layering is visible in
+the file rather than implied by the order in which names happen to resolve.
+
+A derived field that reads another derived field is refused at startup, and a payload
+that reads another payload likewise. Before `payloads` existed, the first of those
+loaded without complaint and then resolved to `null` on every request, because a rule
+reads names out of the *stored* row and a computed value is never written back there.
 
 A stored field is written either in short form, `name: [KIND, …]`, or in long form:
 
@@ -261,13 +294,15 @@ Startup validation, all of it fatal and all of it performed by `create_app`
 * the file exists, parses as YAML, and matches the model;
 * no mapping in the document repeats a key — at **every** level, not only view
   names: the fields of one view, the constants, and any other mapping alike;
-* every view declares at least one field, stored or derived;
+* every view declares at least one field, stored, derived or a payload;
 * field names are flat — no dots, and nothing but letters, digits and underscores;
-* no name is both a stored and a derived field of the same view;
+* no name appears in more than one of the three sections of the same view;
 * every rule parses inside the closed language, with a known function name and the
   right number of arguments;
-* every name a rule reads is a declared field, a derived field of the same view, or a
-  constant — otherwise no producer would know to write it;
+* every `format_date` pattern is a literal and one of the names in the allowlist;
+* every name a `derived` rule reads is a declared field or a constant, and every name
+  a `payloads` rule reads is a declared field, a constant or a derived field of the
+  same view — otherwise no producer would know to write it;
 * every argument in a date position of `add_days` or `days_between` provably yields a
   date, following `coalesce`, `min`, `max` and the branches of `if_else` recursively.
 
@@ -336,6 +371,24 @@ references, named constants and literals — nothing else parses.
 | `max(a, …)` | 1 or more | any | largest argument, ignoring `null`; `null` when all are `null` |
 | `first(a)` | 1 | any | first element of an array; `null` when it is empty or `null` |
 | `join(separator, values)` | 2 | string | the values joined with `separator`; a `null` array joins to `""` |
+| `concat(value, …)` | 1+ | string | the values run together, no separator. A `null` contributes `""`, never the text `"None"` |
+| `format_date(value, pattern)` | 2 | string | the date rendered with a **named** pattern; `null` stays `null` |
+
+`concat` is variadic over scalars, unlike `join`, which takes a separator and a list
+— a list literal is not part of this language.
+
+`format_date` takes a name, not a strftime format:
+
+| Pattern | Example |
+|---|---|
+| `YYYYMMDD` | `20260919` |
+| `YYYY-MM-DD` | `2026-09-19` |
+
+An allowlist rather than a free format, for two reasons. A free pattern in a
+configuration file is a typo that nothing catches until a pass carries it — and this
+language exists precisely so that a configuration cannot express a wrong pass. And
+`%` sequences travel badly: the same value may pass through a `ConfigParser` or a
+shell further down. An unknown name fails when the rule is parsed, so at startup.
 
 The conditional is named `if_else` and not `if` because `if` is a Python keyword: the
 parser underneath is `ast.parse`, so a rule written as `if(…)` could not be parsed at
